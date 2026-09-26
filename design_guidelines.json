@@ -1,0 +1,210 @@
+{
+  "project_name": "Chiste Studio AI",
+  "app_type": "creative_studio_dashboard",
+  "design_archetype": "Electric Cartoon Studio & AI Video Production",
+  "theme": {
+    "default_mode": "dark",
+    "supported_modes": ["dark", "light"],
+    "description": "High-energy animation studio theme with rich dark slate studio surface, high-contrast video viewports, electric coral-orange primary actions, and neon accent indicators for render states and audio waveforms."
+  },
+  "typography": {
+    "primary_font": "Plus Jakarta Sans, sans-serif",
+    "display_font": "Fredoka, Outfit, sans-serif",
+    "mono_font": "JetBrains Mono, monospace",
+    "font_imports": [
+      "https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap"
+    ],
+    "hierarchy": {
+      "h1": "text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight font-display",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight font-display",
+      "h3": "text-xl sm:text-2xl font-semibold tracking-tight",
+      "h4": "text-lg sm:text-xl font-semibold",
+      "body_lg": "text-base sm:text-lg leading-relaxed",
+      "body_md": "text-sm sm:text-base leading-normal",
+      "caption": "text-xs font-medium tracking-wider uppercase text-muted-foreground",
+      "subtitle": "text-base sm:text-lg text-muted-foreground font-normal"
+    }
+  },
+  "colors": {
+    "palette": {
+      "studio_bg": "#0B0F17",
+      "studio_surface": "#131B2E",
+      "studio_card": "#1A243B",
+      "studio_border": "#283655",
+      "primary_coral": "#FF5A36",
+      "primary_coral_hover": "#E04826",
+      "secondary_violet": "#6366F1",
+      "secondary_violet_hover": "#4F46E5",
+      "accent_lime": "#10B981",
+      "accent_yellow": "#F59E0B",
+      "accent_pink": "#EC4899",
+      "text_main": "#F8FAFC",
+      "text_muted": "#94A3B8"
+    },
+    "tailwind_hsl_mapping": {
+      "--background": "222 47% 7%",
+      "--foreground": "210 40% 98%",
+      "--card": "222 36% 11%",
+      "--card-foreground": "210 40% 98%",
+      "--popover": "222 36% 11%",
+      "--popover-foreground": "210 40% 98%",
+      "--primary": "12 100% 60%",
+      "--primary-foreground": "0 0% 100%",
+      "--secondary": "239 84% 67%",
+      "--secondary-foreground": "0 0% 100%",
+      "--muted": "217 33% 17%",
+      "--muted-foreground": "215 20% 65%",
+      "--accent": "160 84% 39%",
+      "--accent-foreground": "0 0% 100%",
+      "--destructive": "0 84% 60%",
+      "--border": "220 36% 20%",
+      "--input": "220 36% 20%",
+      "--ring": "12 100% 60%"
+    },
+    "forbidden_colors": ["#7351B7", "#1B93A4"]
+  },
+  "visual_enhancers": {
+    "glassmorphism": "backdrop-blur-md bg-[#131B2E]/80 border border-white/10 shadow-xl",
+    "video_preview_9_16": "aspect-[9/16] max-w-[320px] mx-auto rounded-2xl overflow-hidden border-2 border-primary/30 shadow-2xl relative bg-black",
+    "comic_card_accent": "relative overflow-hidden rounded-xl border border-white/10 bg-[#1A243B] hover:border-primary/50 transition-all duration-300",
+    "cost_badge": "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20",
+    "status_pills": {
+      "draft": "bg-slate-800 text-slate-300 border-slate-700",
+      "generating": "bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse",
+      "approved": "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+      "rendering": "bg-purple-500/10 text-purple-400 border-purple-500/20",
+      "completed": "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
+      "failed": "bg-red-500/10 text-red-400 border-red-500/20"
+    }
+  },
+  "grids_and_layouts": {
+    "dashboard_layout": "grid grid-cols-1 lg:grid-cols-12 gap-6 p-4 sm:p-6 lg:p-8 max-w-[1700px] mx-auto",
+    "editor_studio_split": {
+      "left_panel": "col-span-1 lg:col-span-7 space-y-6",
+      "right_preview_panel": "col-span-1 lg:col-span-5 sticky top-20 h-fit space-y-6"
+    },
+    "storyboard_grid": "grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4",
+    "character_grid": "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
+  },
+  "components": {
+    "header_nav": {
+      "style": "sticky top-0 z-50 backdrop-blur-xl bg-[#0B0F17]/85 border-b border-white/10 px-4 py-3 sm:px-8",
+      "items": [
+        "Brand Logo & Title (Chiste Studio AI + Comedy Mascot Badge)",
+        "Language Switcher (ES/EN Toggle)",
+        "Main Studio Navigation Tabs (Joke Generator, Script & Storyboard, Characters, Video Studio, Project Library)",
+        "API Failure / Cost Tracker Widget",
+        "New Project CTA Button"
+      ]
+    },
+    "joke_generator_modal": {
+      "topic_tags": ["Standup", "Office Humor", "School & Kids", "Dark Comedy", "Absurd Cartoon", "Sarcastic AI", "Mexican / LatAm Jokes", "Custom Prompt"],
+      "duration_options": ["15s Shorts", "30s Reels", "60s TikTok"],
+      "language_selector": ["Spanish (LatAm / Spain)", "English (US / UK)"],
+      "cost_estimator": "Real-time calculation based on characters generated + voice seconds + image count"
+    },
+    "script_editor": {
+      "scene_card": "Interactive scene box with Character Voice selector, Line Input, Sound Effect dropdown, Camera Motion (Zoom In, Pan Left, Tilt Up, Pan Right), and Image Prompt generator",
+      "character_avatar_pill": "Rounded avatar with character color code and voice test audio player"
+    },
+    "storyboard_preview": {
+      "canvas": "9:16 vertical video player simulator with subtitle visualizer overlay, camera motion keyframes toggle, and scene regeneration button",
+      "controls": "Play / Pause, Frame scrubber, Regenerate Image, Regenerate Voice Audio, Swap Camera Movement"
+    },
+    "approval_workflow": {
+      "steps": ["1. Script & Dialogue Approved", "2. Voice Audio Synthesized", "3. Cartoon Images Locked", "4. Assembly & Creatomate Render"],
+      "render_cta": "Prominent 'Assemble & Export MP4 (9:16)' button with total estimated cost tag"
+    },
+    "project_library": {
+      "card_item": "Video Thumbnail, Title, Language badge, Duration, Export Status, Download MP4 button, Re-edit Script button"
+    },
+    "cost_tracking_dashboard": {
+      "metrics": ["Total Studio Spent", "ElevenLabs Voice Characters Used", "AI Image Gens", "Creatomate Assembly Minutes"],
+      "retry_log": "API Failure & Automatic Retry Inspector with retry button"
+    }
+  },
+  "bilingual_ui_rules": {
+    "default_language": "es",
+    "language_toggle_selector": "[data-testid='language-toggle-button']",
+    "supported_languages": {
+      "es": "Español",
+      "en": "English"
+    },
+    "translation_dictionary_structure": "Ensure every UI button, placeholder, label, tab, toast, and status has both Spanish and English string values in a src/locales or src/i18n state dictionary."
+  },
+  "image_urls": [
+    {
+      "category": "cartoon_characters",
+      "description": "Orange round comedy character with broad eyes",
+      "url": "https://images.unsplash.com/photo-1628260412297-a3377e45006f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MDV8MHwxfHNlYXJjaHwxfHxmdW5ueSUyMGNhcnRvb24lMjBjaGFyYWN0ZXJzJTIwY29tZWR5fGVufDB8fHx8MTc5MDQ2MjU1N3ww&ixlib=rb-4.1.0&q=85"
+    },
+    {
+      "category": "cartoon_characters",
+      "description": "Expressive orange toy mascot character",
+      "url": "https://images.unsplash.com/photo-1639628735078-ed2f038a193e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MDV8MHwxfHNlYXJjaHwyfHxmdW5ueSUyMGNhcnRvb24lMjBjaGFyYWN0ZXJzJTIwY29tZWR5fGVufDB8fHx8MTc5MDQ2MjU1N3ww&ixlib=rb-4.1.0&q=85"
+    },
+    {
+      "category": "cartoon_characters",
+      "description": "Drawn cartoon comedy couple",
+      "url": "https://images.unsplash.com/photo-1743964451771-abf993f87b66?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MDV8MHwxfHNlYXJjaHwzfHxmdW5ueSUyMGNhcnRvb24lMjBjaGFyYWN0ZXJzJTIwY29tZWR5fGVufDB8fHx8MTc5MDQ2MjU1N3ww&ixlib=rb-4.1.0&q=85"
+    },
+    {
+      "category": "studio_backdrop",
+      "description": "Animation studio workstation desk",
+      "url": "https://images.unsplash.com/photo-1622960668894-75d014c9bf83?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NDh8MHwxfHNlYXJjaHwzfHxjYXJ0b29uJTIwYW5pbWF0aW9uJTIwc3R1ZGlvJTIwdmVjdG9yJTIwaWxsdXN0cmF0aW9ufGVufDB8fHx8MTc5MDQ2MjU1N3ww&ixlib=rb-4.1.0&q=85"
+    },
+    {
+      "category": "sketch_scene",
+      "description": "Artist drawing cartoon character storyboard",
+      "url": "https://images.unsplash.com/photo-1569154076682-4c0466623ec2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NDh8MHwxfHNlYXJjaHwyfHxjYXJ0b29uJTIwYW5pbWF0aW9uJTIwc3R1ZGlvJTIwdmVjdG9yJTIwaWxsdXN0cmF0aW9ufGVufDB8fHx8MTc5MDQ2MjU1N3ww&ixlib=rb-4.1.0&q=85"
+    }
+  ],
+  "motion_and_animations": {
+    "framer_motion_variants": {
+      "fade_in_up": "{ hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0, transition: { duration: 0.3 } } }",
+      "stagger_container": "{ hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.08 } } }",
+      "pulse_glow": "{ animate: { scale: [1, 1.02, 1], boxShadow: ['0 0 0px rgba(255,90,54,0)', '0 0 20px rgba(255,90,54,0.3)', '0 0 0px rgba(255,90,54,0)'] }, transition: { duration: 2, repeat: Infinity } }"
+    },
+    "micro_interactions": {
+      "button_hover": "hover:scale-[1.02] active:scale-[0.98] transition-transform duration-150",
+      "card_hover": "hover:-translate-y-1 hover:border-primary/40 transition-all duration-200"
+    }
+  },
+  "data_testid_requirements": {
+    "language_toggle": "language-toggle-button",
+    "joke_generator_button": "joke-generator-trigger",
+    "topic_select": "joke-topic-select",
+    "duration_select": "joke-duration-select",
+    "custom_joke_input": "custom-joke-textarea",
+    "generate_script_btn": "generate-script-button",
+    "script_scene_input": "script-scene-line-input",
+    "character_select_dropdown": "scene-character-select",
+    "camera_motion_select": "scene-camera-motion-select",
+    "sfx_select": "scene-sfx-select",
+    "regenerate_scene_img_btn": "regenerate-scene-image-button",
+    "audio_preview_play_btn": "audio-preview-play-button",
+    "approval_checkbox": "scene-approval-checkbox",
+    "export_video_button": "export-video-creatomate-button",
+    "cost_tracker_modal_btn": "cost-tracker-details-button",
+    "retry_failed_api_btn": "retry-failed-api-button",
+    "project_card_download_btn": "project-card-download-button"
+  },
+  "instructions_to_main_agent": [
+    "Use standard JavaScript .js / .jsx file extensions for all React components.",
+    "Implement language state management so the entire UI seamlessly switches between Spanish and English.",
+    "Ensure 9:16 aspect ratio vertical video preview is realistic, showing animated cartoon slide, camera motion indicators, synchronized voice wave preview, and subtitles.",
+    "Implement ElevenLabs voice dropdowns with voice preview audio snippets and tone options (e.g., Sarcastic, Excited, Deadpan, Screaming, Goofy).",
+    "Provide Creatomate assembly pipeline simulation with real status updates (Assembly, Sound Effects Layering, Subtitle Alignment, MP4 Rendering) and detailed cost estimation breakdown ($/video).",
+    "Add retry mechanism UI for handling simulated or actual API failures with exponential backoff status indicators.",
+    "Include sample pre-loaded funny jokes in both Spanish and English (e.g. '¿Qué hace una abeja en el gimnasio? ¡Buzz-ba!', 'Why don't scientists trust atoms? Because they make up everything!').",
+    "All interactive elements MUST have explicit data-testid attributes."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Never use dark colors as heavy full-screen gradient overlays.",
+    "Maintain high APCA / WCAG text contrast for all buttons, input labels, and active states.",
+    "Containers with borders must always have generous padding (p-4 to p-8) to prevent visual crowding.",
+    "Use direct grid children when utilizing framer-motion wrapped elements.",
+    "Always set explicit hover text colors (e.g. hover:bg-slate-900 hover:text-white).",
+    "Never hide primary navigation on desktop browsers."
+  ]
+}

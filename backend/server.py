@@ -1,0 +1,606 @@
+from fastapi import FastAPI, APIRouter, HTTPException, Request
+from fastapi.responses import Response
+from dotenv import load_dotenv
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+import os
+import re
+import json
+import base64
+import logging
+import asyncio
+from pathlib import Path
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
+import uuid
+from datetime import datetime, timezone
+
+from emergentintegrations.llm.chat import LlmChat, UserMessage
+from emergentintegrations.llm.openai.image_generation import OpenAIImageGeneration
+from elevenlabs.client import ElevenLabs
+from render import render_video
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+mongo_url = os.environ['MONGO_URL']
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ['DB_NAME']]
+
+EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+ELEVENLABS_API_KEY = os.environ.get('ELEVENLABS_API_KEY')
+CREATOMATE_API_KEY = os.environ.get('CREATOMATE_API_KEY')
+
+app = FastAPI()
+api_router = APIRouter(prefix="/api")
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# ---------------- Cost model ----------------
+COST = {
+    "joke": 0.01,
+    "script": 0.02,
+    "image": 0.04,          # per gpt-image-1 image
+    "tts_per_char": 0.00018,  # ElevenLabs approx
+    "render_per_sec": 0.0,    # FFmpeg local render is free
+}
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+async def log_cost(project_id: Optional[str], kind: str, units: float, amount: float, detail: str = ""):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "project_id": project_id,
+        "kind": kind,
+        "units": units,
+        "amount": round(amount, 4),
+        "detail": detail,
+        "created_at": now_iso(),
+    }
+    await db.cost_events.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+async def log_failure(service: str, endpoint: str, error: str, project_id: Optional[str] = None, payload: Optional[dict] = None):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "service": service,
+        "endpoint": endpoint,
+        "error": str(error)[:500],
+        "project_id": project_id,
+        "payload": payload or {},
+        "resolved": False,
+        "attempts": 1,
+        "created_at": now_iso(),
+    }
+    await db.api_failures.insert_one(doc)
+    logger.error(f"[{service}] {endpoint} failed: {error}")
+
+# ---------------- Asset storage (images/audio) ----------------
+async def save_asset(kind: str, content_type: str, data_bytes: bytes, project_id: Optional[str] = None) -> str:
+    asset_id = str(uuid.uuid4())
+    await db.assets.insert_one({
+        "id": asset_id,
+        "kind": kind,
+        "content_type": content_type,
+        "data": base64.b64encode(data_bytes).decode(),
+        "project_id": project_id,
+        "created_at": now_iso(),
+    })
+    return asset_id
+
+@api_router.get("/assets/{asset_id}")
+async def get_asset(asset_id: str):
+    doc = await db.assets.find_one({"id": asset_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Asset not found")
+    return Response(content=base64.b64decode(doc["data"]), media_type=doc["content_type"])
+
+# ---------------- LLM helpers ----------------
+def strip_json(text: str) -> str:
+    text = text.strip()
+    m = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return text
+
+async def llm_complete(system: str, prompt: str, session: str = "chiste") -> str:
+    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=session, system_message=system).with_model("openai", "gpt-5.4")
+    resp = await chat.send_message(UserMessage(text=prompt))
+    return resp if isinstance(resp, str) else str(resp)
+
+# ---------------- Models ----------------
+class JokeRequest(BaseModel):
+    topic: str = "standup"
+    language: str = "es"
+    duration: int = 30
+    custom_joke: Optional[str] = None
+
+class ScriptRequest(BaseModel):
+    joke: str
+    language: str = "es"
+    duration: int = 30
+    characters: List[Dict[str, Any]] = []
+
+class Character(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    description: str = ""
+    color: str = "#FF5A36"
+    voice_id: Optional[str] = None
+    voice_name: Optional[str] = None
+    reference_image_asset_id: Optional[str] = None
+    created_at: str = Field(default_factory=now_iso)
+
+class CharacterCreate(BaseModel):
+    name: str
+    description: str = ""
+    color: str = "#FF5A36"
+    voice_id: Optional[str] = None
+    voice_name: Optional[str] = None
+    generate_image: bool = False
+
+class Scene(BaseModel):
+    index: int
+    character_name: str = ""
+    character_id: Optional[str] = None
+    dialogue: str = ""
+    is_narration: bool = False
+    camera_motion: str = "zoom_in"
+    sfx: str = "none"
+    image_prompt: str = ""
+    image_asset_id: Optional[str] = None
+    audio_asset_id: Optional[str] = None
+    voice_id: Optional[str] = None
+    approved: bool = False
+
+class ProjectCreate(BaseModel):
+    title: str
+    language: str = "es"
+    topic: str = "standup"
+    duration: int = 30
+    joke: str = ""
+    scenes: List[Scene] = []
+
+class ProjectUpdate(BaseModel):
+    title: Optional[str] = None
+    joke: Optional[str] = None
+    scenes: Optional[List[Scene]] = None
+    status: Optional[str] = None
+
+class TTSRequest(BaseModel):
+    text: str
+    voice_id: str
+    stability: float = 0.5
+    similarity_boost: float = 0.75
+    style: float = 0.4
+    project_id: Optional[str] = None
+
+class SceneGenRequest(BaseModel):
+    scene: Scene
+    characters: List[Dict[str, Any]] = []
+    language: str = "es"
+
+# ---------------- Joke generation ----------------
+@api_router.post("/jokes/generate")
+async def generate_joke(req: JokeRequest):
+    if req.custom_joke and req.custom_joke.strip():
+        await log_cost(None, "joke", 1, COST["joke"], "custom")
+        return {"joke": req.custom_joke.strip(), "source": "custom"}
+    lang = "Spanish (Latin American)" if req.language == "es" else "English"
+    system = (
+        "You are a professional comedy writer for short vertical cartoon videos (TikTok/Reels/Shorts). "
+        "Write punchy, clean, family-friendly jokes with a clear setup and punchline."
+    )
+    prompt = (
+        f"Write ONE original short joke in {lang} about the topic: '{req.topic}'. "
+        f"It should fit a {req.duration}-second cartoon video. Keep it concise, visual and funny. "
+        "Return ONLY the joke text, no preface."
+    )
+    try:
+        joke = await llm_complete(system, prompt, "joke-gen")
+        await log_cost(None, "joke", 1, COST["joke"], req.topic)
+        return {"joke": joke.strip(), "source": "ai"}
+    except Exception as e:
+        await log_failure("openai", "/jokes/generate", e)
+        raise HTTPException(502, "Joke generation failed. Please retry.")
+
+# ---------------- Script generation ----------------
+@api_router.post("/scripts/generate")
+async def generate_script(req: ScriptRequest):
+    lang = "Spanish" if req.language == "es" else "English"
+    n_scenes = max(2, min(6, round(req.duration / 8)))
+    char_hint = ""
+    if req.characters:
+        names = ", ".join([c.get("name", "") for c in req.characters])
+        char_hint = f"Use these existing characters when possible: {names}. "
+    system = (
+        "You are a storyboard writer for short cartoon comedy videos. You break a joke into visual scenes "
+        "with per-character dialogue, camera movement and a sound effect. You always respond with strict JSON."
+    )
+    prompt = (
+        f"Break this joke into a storyboard of about {n_scenes} scenes for a {req.duration}s vertical cartoon video in {lang}.\n\n"
+        f"JOKE:\n{req.joke}\n\n{char_hint}"
+        "Return STRICT JSON with this shape:\n"
+        '{"characters":[{"name":"","description":"visual cartoon description"}],'
+        '"scenes":[{"character_name":"","dialogue":"","is_narration":false,'
+        '"camera_motion":"zoom_in|zoom_out|pan_left|pan_right|tilt_up|static",'
+        '"sfx":"none|laugh|drum|boing|pop|whoosh|applause|ding",'
+        '"image_prompt":"detailed cartoon scene illustration prompt, flat vector style, vibrant colors, 9:16"}]}\n'
+        "Keep dialogue short and punchy. The final scene must land the punchline. Return ONLY JSON."
+    )
+    try:
+        raw = await llm_complete(system, prompt, "script-gen")
+        data = json.loads(strip_json(raw))
+        scenes = []
+        for i, s in enumerate(data.get("scenes", [])):
+            scenes.append(Scene(
+                index=i,
+                character_name=s.get("character_name", ""),
+                dialogue=s.get("dialogue", ""),
+                is_narration=bool(s.get("is_narration", False)),
+                camera_motion=s.get("camera_motion", "zoom_in"),
+                sfx=s.get("sfx", "none"),
+                image_prompt=s.get("image_prompt", ""),
+            ).model_dump())
+        await log_cost(None, "script", 1, COST["script"])
+        return {"characters": data.get("characters", []), "scenes": scenes}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await log_failure("openai", "/scripts/generate", e)
+        raise HTTPException(502, "Script generation failed. Please retry.")
+
+# ---------------- Characters ----------------
+async def gen_character_image(description: str, name: str, color: str, project_id=None) -> str:
+    image_gen = OpenAIImageGeneration(api_key=EMERGENT_LLM_KEY)
+    prompt = (
+        f"Full-body character reference sheet of a cartoon character named {name}. "
+        f"{description}. Flat vector cartoon style, bold clean outlines, vibrant colors, "
+        f"expressive face, plain light studio background, centered, high detail."
+    )
+    images = await image_gen.generate_images(prompt=prompt, model="gpt-image-1", number_of_images=1)
+    if not images:
+        raise RuntimeError("No image returned")
+    return await save_asset("character_image", "image/png", images[0], project_id)
+
+@api_router.get("/characters")
+async def list_characters():
+    docs = await db.characters.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return docs
+
+@api_router.post("/characters")
+async def create_character(req: CharacterCreate):
+    char = Character(**req.model_dump(exclude={"generate_image"}))
+    if req.generate_image:
+        try:
+            char.reference_image_asset_id = await gen_character_image(req.description, req.name, req.color)
+            await log_cost(None, "image", 1, COST["image"], f"character:{req.name}")
+        except Exception as e:
+            await log_failure("openai", "/characters (image)", e)
+    doc = char.model_dump()
+    await db.characters.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.post("/characters/{char_id}/generate-image")
+async def regenerate_character_image(char_id: str):
+    char = await db.characters.find_one({"id": char_id}, {"_id": 0})
+    if not char:
+        raise HTTPException(404, "Character not found")
+    try:
+        asset_id = await gen_character_image(char.get("description", ""), char["name"], char.get("color", "#FF5A36"))
+        await db.characters.update_one({"id": char_id}, {"$set": {"reference_image_asset_id": asset_id}})
+        await log_cost(None, "image", 1, COST["image"], f"character:{char['name']}")
+        return {"reference_image_asset_id": asset_id}
+    except Exception as e:
+        await log_failure("openai", "/characters/generate-image", e)
+        raise HTTPException(502, "Image generation failed. Please retry.")
+
+@api_router.put("/characters/{char_id}")
+async def update_character(char_id: str, req: CharacterCreate):
+    updates = req.model_dump(exclude={"generate_image"})
+    r = await db.characters.update_one({"id": char_id}, {"$set": updates})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Character not found")
+    return await db.characters.find_one({"id": char_id}, {"_id": 0})
+
+@api_router.delete("/characters/{char_id}")
+async def delete_character(char_id: str):
+    await db.characters.delete_one({"id": char_id})
+    return {"ok": True}
+
+# ---------------- ElevenLabs voices ----------------
+_voice_cache: Dict[str, Any] = {}
+
+@api_router.get("/voices")
+async def get_voices():
+    if _voice_cache.get("voices"):
+        return _voice_cache["voices"]
+    if not ELEVENLABS_API_KEY:
+        return []
+    try:
+        el = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+        res = el.voices.get_all()
+        voices = []
+        for v in res.voices:
+            labels = getattr(v, "labels", {}) or {}
+            voices.append({
+                "voice_id": v.voice_id,
+                "name": v.name,
+                "preview_url": getattr(v, "preview_url", None),
+                "category": getattr(v, "category", None),
+                "labels": labels,
+            })
+        _voice_cache["voices"] = voices
+        return voices
+    except Exception as e:
+        await log_failure("elevenlabs", "/voices", e)
+        return []
+
+@api_router.post("/tts/generate")
+async def generate_tts(req: TTSRequest):
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(400, "ElevenLabs API key not configured")
+    try:
+        el = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+        from elevenlabs import VoiceSettings
+        audio_gen = el.text_to_speech.convert(
+            text=req.text,
+            voice_id=req.voice_id,
+            model_id="eleven_multilingual_v2",
+            voice_settings=VoiceSettings(
+                stability=req.stability,
+                similarity_boost=req.similarity_boost,
+                style=req.style,
+                use_speaker_boost=True,
+            ),
+        )
+        audio = b""
+        for chunk in audio_gen:
+            audio += chunk
+        asset_id = await save_asset("audio", "audio/mpeg", audio, req.project_id)
+        await log_cost(req.project_id, "tts", len(req.text), len(req.text) * COST["tts_per_char"], "tts")
+        return {"asset_id": asset_id, "url": f"/api/assets/{asset_id}"}
+    except Exception as e:
+        await log_failure("elevenlabs", "/tts/generate", e, req.project_id)
+        raise HTTPException(502, "Voice generation failed. Please retry.")
+
+# ---------------- Scene image generation ----------------
+def build_scene_prompt(scene: dict, characters: List[dict]) -> str:
+    char_desc = ""
+    cname = scene.get("character_name", "")
+    for c in characters:
+        if c.get("name") == cname and c.get("description"):
+            char_desc = f" The character {cname}: {c['description']}."
+            break
+    return (
+        f"{scene.get('image_prompt','')}.{char_desc} "
+        "Flat vector cartoon illustration, bold clean outlines, vibrant saturated colors, "
+        "dynamic comedic composition, vertical 9:16 framing, no text, no watermark."
+    )
+
+@api_router.post("/projects/{project_id}/scenes/{index}/generate-image")
+async def generate_scene_image(project_id: str, index: int, req: SceneGenRequest):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(404, "Project not found")
+    try:
+        image_gen = OpenAIImageGeneration(api_key=EMERGENT_LLM_KEY)
+        prompt = build_scene_prompt(req.scene.model_dump(), req.characters)
+        images = await image_gen.generate_images(prompt=prompt, model="gpt-image-1", number_of_images=1)
+        if not images:
+            raise RuntimeError("No image returned")
+        asset_id = await save_asset("scene_image", "image/png", images[0], project_id)
+        await _update_scene_field(project_id, index, "image_asset_id", asset_id)
+        await log_cost(project_id, "image", 1, COST["image"], f"scene:{index}")
+        return {"asset_id": asset_id, "url": f"/api/assets/{asset_id}"}
+    except Exception as e:
+        await log_failure("openai", "/scenes/generate-image", e, project_id)
+        raise HTTPException(502, "Image generation failed. Please retry.")
+
+@api_router.post("/projects/{project_id}/scenes/{index}/generate-audio")
+async def generate_scene_audio(project_id: str, index: int, req: SceneGenRequest):
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(400, "ElevenLabs API key not configured")
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(404, "Project not found")
+    scene = req.scene
+    voice_id = scene.voice_id
+    if not voice_id:
+        for c in req.characters:
+            if c.get("name") == scene.character_name:
+                voice_id = c.get("voice_id")
+                break
+    if not voice_id:
+        raise HTTPException(400, "No voice assigned to this scene/character")
+    try:
+        el = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+        from elevenlabs import VoiceSettings
+        audio_gen = el.text_to_speech.convert(
+            text=scene.dialogue, voice_id=voice_id, model_id="eleven_multilingual_v2",
+            voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.75, style=0.4, use_speaker_boost=True),
+        )
+        audio = b""
+        for chunk in audio_gen:
+            audio += chunk
+        asset_id = await save_asset("audio", "audio/mpeg", audio, project_id)
+        await _update_scene_field(project_id, index, "audio_asset_id", asset_id)
+        await _update_scene_field(project_id, index, "voice_id", voice_id)
+        await log_cost(project_id, "tts", len(scene.dialogue), len(scene.dialogue) * COST["tts_per_char"], f"scene:{index}")
+        return {"asset_id": asset_id, "url": f"/api/assets/{asset_id}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await log_failure("elevenlabs", "/scenes/generate-audio", e, project_id)
+        raise HTTPException(502, "Voice generation failed. Please retry.")
+
+async def _update_scene_field(project_id: str, index: int, field: str, value):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        return
+    scenes = project.get("scenes", [])
+    for s in scenes:
+        if s.get("index") == index:
+            s[field] = value
+    await db.projects.update_one({"id": project_id}, {"$set": {"scenes": scenes, "updated_at": now_iso()}})
+
+# ---------------- Projects ----------------
+@api_router.get("/projects")
+async def list_projects():
+    docs = await db.projects.find({}, {"_id": 0}).sort("updated_at", -1).to_list(200)
+    return docs
+
+@api_router.post("/projects")
+async def create_project(req: ProjectCreate):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "title": req.title,
+        "language": req.language,
+        "topic": req.topic,
+        "duration": req.duration,
+        "joke": req.joke,
+        "scenes": [s.model_dump() for s in req.scenes],
+        "status": "draft",
+        "render_id": None,
+        "video_url": None,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.projects.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.get("/projects/{project_id}")
+async def get_project(project_id: str):
+    doc = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Project not found")
+    return doc
+
+@api_router.put("/projects/{project_id}")
+async def update_project(project_id: str, req: ProjectUpdate):
+    updates = {k: v for k, v in req.model_dump(exclude_none=True).items()}
+    if "scenes" in updates and updates["scenes"] is not None:
+        updates["scenes"] = [s if isinstance(s, dict) else s for s in updates["scenes"]]
+    updates["updated_at"] = now_iso()
+    r = await db.projects.update_one({"id": project_id}, {"$set": updates})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Project not found")
+    return await db.projects.find_one({"id": project_id}, {"_id": 0})
+
+@api_router.delete("/projects/{project_id}")
+async def delete_project(project_id: str):
+    await db.projects.delete_one({"id": project_id})
+    return {"ok": True}
+
+# ---------------- Local FFmpeg render (free, self-hosted) ----------------
+async def _asset_bytes(asset_id: Optional[str]) -> Optional[bytes]:
+    if not asset_id:
+        return None
+    doc = await db.assets.find_one({"id": asset_id}, {"_id": 0})
+    return base64.b64decode(doc["data"]) if doc else None
+
+async def _render_task(project_id: str):
+    try:
+        project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+        scenes_data = []
+        for s in project.get("scenes", []):
+            if not s.get("image_asset_id"):
+                continue
+            img = await _asset_bytes(s["image_asset_id"])
+            aud = await _asset_bytes(s.get("audio_asset_id"))
+            scenes_data.append({
+                "image_bytes": img,
+                "audio_bytes": aud,
+                "dialogue": s.get("dialogue", ""),
+                "camera_motion": s.get("camera_motion", "zoom_in"),
+            })
+        mp4 = await asyncio.to_thread(render_video, scenes_data)
+        asset_id = await save_asset("video", "video/mp4", mp4, project_id)
+        await db.projects.update_one({"id": project_id}, {"$set": {
+            "status": "completed", "video_url": f"/api/assets/{asset_id}",
+            "render_id": asset_id, "updated_at": now_iso()}})
+        await log_cost(project_id, "render", 1, 0.0, "ffmpeg-local")
+        logger.info(f"Render completed for project {project_id}")
+    except Exception as e:
+        await log_failure("ffmpeg", "/render", e, project_id)
+        await db.projects.update_one({"id": project_id}, {"$set": {
+            "status": "failed", "updated_at": now_iso()}})
+
+@api_router.post("/projects/{project_id}/render")
+async def render_project(project_id: str):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(404, "Project not found")
+    scenes_with_img = [s for s in project.get("scenes", []) if s.get("image_asset_id")]
+    if not scenes_with_img:
+        raise HTTPException(400, "Generate scene images before exporting the video")
+    await db.projects.update_one({"id": project_id}, {"$set": {
+        "status": "rendering", "video_url": None, "updated_at": now_iso()}})
+    asyncio.create_task(_render_task(project_id))
+    return {"status": "rendering"}
+
+@api_router.get("/projects/{project_id}/render-status")
+async def render_status(project_id: str):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(404, "Project not found")
+    return {"status": project.get("status", "draft"), "video_url": project.get("video_url")}
+
+# ---------------- Cost & failures ----------------
+@api_router.get("/costs/summary")
+async def cost_summary():
+    events = await db.cost_events.find({}, {"_id": 0}).to_list(5000)
+    total = sum(e["amount"] for e in events)
+    by_kind: Dict[str, Dict[str, float]] = {}
+    for e in events:
+        k = e["kind"]
+        by_kind.setdefault(k, {"amount": 0.0, "units": 0.0, "count": 0})
+        by_kind[k]["amount"] += e["amount"]
+        by_kind[k]["units"] += e["units"]
+        by_kind[k]["count"] += 1
+    for k in by_kind:
+        by_kind[k]["amount"] = round(by_kind[k]["amount"], 4)
+    recent = sorted(events, key=lambda x: x["created_at"], reverse=True)[:20]
+    return {"total": round(total, 4), "by_kind": by_kind, "recent": recent}
+
+@api_router.get("/failures")
+async def list_failures():
+    docs = await db.api_failures.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return docs
+
+@api_router.post("/failures/{failure_id}/resolve")
+async def resolve_failure(failure_id: str):
+    await db.api_failures.update_one({"id": failure_id}, {"$set": {"resolved": True}})
+    return {"ok": True}
+
+@api_router.get("/config")
+async def get_config():
+    return {
+        "elevenlabs_enabled": bool(ELEVENLABS_API_KEY),
+        "render_enabled": True,
+        "render_engine": "ffmpeg-local",
+        "cost_model": COST,
+    }
+
+@api_router.get("/")
+async def root():
+    return {"message": "Chiste Studio AI API"}
+
+app.include_router(api_router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    client.close()

@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        --background: 222 47% 7%;
+        --foreground: 210 40% 98%;
+        --card: 222 36% 11%;
+        --card-foreground: 210 40% 98%;
+        --popover: 222 40% 9%;
+        --popover-foreground: 210 40% 98%;
+        --primary: 12 100% 60%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 239 84% 67%;
+        --secondary-foreground: 0 0% 100%;
+        --muted: 217 33% 17%;
+        --muted-foreground: 215 20% 65%;
+        --accent: 160 84% 39%;
+        --accent-foreground: 0 0% 100%;
+        --destructive: 0 84% 60%;
+        --destructive-foreground: 0 0% 98%;
+        --border: 220 36% 20%;
+        --input: 220 36% 20%;
+        --ring: 12 100% 60%;
+        --radius: 0.75rem;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    body {
+        @apply bg-background text-foreground;
+        font-family: 'Plus Jakarta Sans', sans-serif;
+        background-image: radial-gradient(circle at 15% 0%, rgba(99, 102, 241, 0.10), transparent 40%),
+                          radial-gradient(circle at 85% 10%, rgba(255, 90, 54, 0.10), transparent 42%);
+        background-attachment: fixed;
+    }
+    .font-display {
+        font-family: 'Fredoka', sans-serif;
+    }
+    .font-mono {
+        font-family: 'JetBrains Mono', monospace;
+    }
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: hsl(222 36% 11%); }
+::-webkit-scrollbar-thumb { background: hsl(220 36% 24%); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(12 100% 60%); }
+
+::selection { background: rgba(255, 90, 54, 0.35); color: #fff; }
+
+/* Ken Burns camera motion previews */
+.kb { will-change: transform; }
+.kb-zoom_in { animation: kbZoomIn 7s ease-in-out infinite alternate; }
+.kb-zoom_out { animation: kbZoomOut 7s ease-in-out infinite alternate; }
+.kb-pan_left { animation: kbPanLeft 7s ease-in-out infinite alternate; }
+.kb-pan_right { animation: kbPanRight 7s ease-in-out infinite alternate; }
+.kb-tilt_up { animation: kbTiltUp 7s ease-in-out infinite alternate; }
+.kb-static { transform: scale(1.05); }
+
+@keyframes kbZoomIn { from { transform: scale(1); } to { transform: scale(1.15); } }
+@keyframes kbZoomOut { from { transform: scale(1.15); } to { transform: scale(1); } }
+@keyframes kbPanLeft { from { transform: scale(1.15) translateX(4%); } to { transform: scale(1.15) translateX(-4%); } }
+@keyframes kbPanRight { from { transform: scale(1.15) translateX(-4%); } to { transform: scale(1.15) translateX(4%); } }
+@keyframes kbTiltUp { from { transform: scale(1.15) translateY(4%); } to { transform: scale(1.15) translateY(-4%); } }
+
+.grain::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.4;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.25'/%3E%3C/svg%3E");
+}
