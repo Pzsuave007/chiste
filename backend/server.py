@@ -157,7 +157,9 @@ async def edit_image_bytes(ref_bytes: bytes, prompt: str, size: str = "1024x1536
         import base64 as _b64, io as _io
         from litellm import image_edit as _edit
         from emergentintegrations.llm.utils import get_integration_proxy_url
-        r = _edit(image=("ref.png", _io.BytesIO(ref_bytes), "image/png"), prompt=prompt,
+        bio = _io.BytesIO(ref_bytes)
+        bio.name = "ref.png"
+        r = _edit(image=bio, prompt=prompt,
                   model="gpt-image-1", api_key=EMERGENT_LLM_KEY,
                   api_base=get_integration_proxy_url() + "/llm", size=size, quality=quality,
                   custom_llm_provider="openai")
