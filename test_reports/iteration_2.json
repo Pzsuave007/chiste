@@ -1,0 +1,32 @@
+{
+  "summary": "Validated the new Review & Approve tab + auto-voice-on-render + punchline-SFX features. Backend: 4/4 new pytest tests pass (test_new_features.py) covering (a) last scene sfx='punchline' from /scripts/generate, (b) /config elevenlabs_enabled+render_enabled, (c) default_voice_id persistence on POST and PUT /projects, (d) full render pipeline auto-generating voice for a dialogue scene that had no voice_id/audio_asset_id (project default_voice_id used as fallback) and confirming the MP4 contains an audio stream via ffmpeg -i probe. Frontend Playwright E2E: home -> new project (project-style-select present, style=Cómic) -> studio; joke generated; script created (4 scenes); Review & Approve tab renders review-card-{i}, review-line-input-{i}, review-regen-image-{i}, review-gen-audio-{i}, review-approve-{i}, default-voice-select, approve-all-button; produce (export-video-creatomate-button) is DISABLED initially, then after backfilling scene images and clicking approve-all-button all 4 checkboxes checked and produce is ENABLED; clicking produce triggered ffmpeg render which completed in ~30s and result-video-player + project-card-download-button rendered. Characters page: creating a character auto-generates visual_dna and character-visual-dna element appears on the card. TEST_ artifacts cleaned up.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Create Project dialog", "issues": ["Radix DialogContent missing Description / aria-describedby (a11y warnings only, non-blocking) - same as iteration 1"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_new_features.py",
+    "/app/test_reports/pytest/pytest_newfeatures.xml",
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_full_flow.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py _ensure_scene_audio: silently swallows per-scene TTS errors via log_failure - render will still proceed with missing audio for that scene. Acceptable for MVP but should surface partial-failure status in render-status response.",
+    "server.py fetch_voices() is cached module-level indefinitely; if the ElevenLabs key is rotated the cache will serve stale voices until process restart. Consider a short TTL (already flagged iter 1).",
+    "Studio.jsx allApproved gates only image_asset_id + approved; it does NOT require audio_asset_id because backend auto-generates voice at render time — this is intentional per the new spec but worth documenting in UI copy (currently only Spanish 'need_approve' hint).",
+    "Home.jsx project-style-select stores style but there's no visible use of it in backend generate_script prompt (style isn't passed to /scripts/generate). Confirm this is intentional or wire the style into the image_prompt generation."
+  ],
+  "updated_files": ["/app/backend/tests/test_new_features.py", "/app/test_reports/iteration_2.json"],
+  "success_rate": {"backend": "100% (4/4 new + 15 existing = 19/19 relevant)", "frontend": "100% of tested flows"},
+  "test_credentials": "N/A - no auth",
+  "seed_data_creation": "TEST_ prefixed project/characters created and cleaned up in fixtures + end-of-run bulk cleanup.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "New features validated. Review tab testids: review-card-{i}, review-line-input-{i}, review-regen-image-{i}, review-gen-audio-{i}, review-approve-{i}, default-voice-select, approve-all-button, export-video-creatomate-button (produce). Produce gating requires every scene to have image_asset_id AND approved=true. To make E2E cheap, generate ONE image via POST /api/projects/{id}/scenes/0/generate-image then PUT the same image_asset_id across all scenes before clicking approve-all-button in UI. Backend auto-voice: creating a project with default_voice_id and scenes lacking voice_id/audio_asset_id then POST /projects/{id}/render will populate audio_asset_id for each dialogue scene. Punchline SFX is auto-set on scenes[-1] by /scripts/generate.",
+  "rca of the issue": "N/A - no issues found in this iteration."
+}
