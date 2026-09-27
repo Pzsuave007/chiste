@@ -128,6 +128,7 @@ class Character(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str
     description: str = ""
+    visual_dna: str = ""
     color: str = "#FF5A36"
     voice_id: Optional[str] = None
     voice_name: Optional[str] = None
@@ -254,6 +255,21 @@ async def generate_script(req: ScriptRequest):
         raise HTTPException(502, "Script generation failed. Please retry.")
 
 # ---------------- Characters ----------------
+async def make_visual_dna(name: str, description: str) -> str:
+    if not description.strip():
+        return ""
+    try:
+        system = ("You create a canonical 'visual DNA' for a cartoon character so an image model draws it "
+                  "identically every time. Output ONE compact comma-separated line.")
+        prompt = (f"Character name: {name}. Notes: {description}. "
+                  "Produce a concise canonical visual description (max 55 words) covering: species/gender, age, "
+                  "skin/fur color, hair style & color, eye color, distinctive facial features, exact outfit with colors, "
+                  "body type, and 'flat vector cartoon style'. Return ONLY the description line.")
+        dna = await llm_complete(system, prompt, "visual-dna")
+        return dna.strip().replace("\n", " ")
+    except Exception:
+        return description.strip()
+
 async def gen_character_image(description: str, name: str, color: str, project_id=None) -> str:
     image_gen = OpenAIImageGeneration(api_key=EMERGENT_LLM_KEY)
     prompt = (
@@ -274,9 +290,11 @@ async def list_characters():
 @api_router.post("/characters")
 async def create_character(req: CharacterCreate):
     char = Character(**req.model_dump(exclude={"generate_image"}))
+    char.visual_dna = await make_visual_dna(req.name, req.description)
     if req.generate_image:
         try:
-            char.reference_image_asset_id = await gen_character_image(req.description, req.name, req.color)
+            char.reference_image_asset_id = await gen_character_image(
+                char.visual_dna or req.description, req.name, req.color)
             await log_cost(None, "image", 1, COST["image"], f"character:{req.name}")
         except Exception as e:
             await log_failure("openai", "/characters (image)", e)
@@ -291,7 +309,8 @@ async def regenerate_character_image(char_id: str):
     if not char:
         raise HTTPException(404, "Character not found")
     try:
-        asset_id = await gen_character_image(char.get("description", ""), char["name"], char.get("color", "#FF5A36"))
+        desc = char.get("visual_dna") or char.get("description", "")
+        asset_id = await gen_character_image(desc, char["name"], char.get("color", "#FF5A36"))
         await db.characters.update_one({"id": char_id}, {"$set": {"reference_image_asset_id": asset_id}})
         await log_cost(None, "image", 1, COST["image"], f"character:{char['name']}")
         return {"reference_image_asset_id": asset_id}
@@ -302,6 +321,7 @@ async def regenerate_character_image(char_id: str):
 @api_router.put("/characters/{char_id}")
 async def update_character(char_id: str, req: CharacterCreate):
     updates = req.model_dump(exclude={"generate_image"})
+    updates["visual_dna"] = await make_visual_dna(req.name, req.description)
     r = await db.characters.update_one({"id": char_id}, {"$set": updates})
     if r.matched_count == 0:
         raise HTTPException(404, "Character not found")
@@ -368,17 +388,47 @@ async def generate_tts(req: TTSRequest):
         await log_failure("elevenlabs", "/tts/generate", e, req.project_id)
         raise HTTPException(502, "Voice generation failed. Please retry.")
 
+# ---------------- Sound effects (ElevenLabs) ----------------
+SFX_PROMPTS = {
+    "laugh": ("sitcom audience laughing, comedy laugh track", 2.5),
+    "drum": ("comedy rimshot drum sting, ba dum tss", 1.5),
+    "boing": ("cartoon boing spring sound effect", 1.2),
+    "pop": ("cartoon pop bubble sound effect", 1.0),
+    "whoosh": ("fast cartoon whoosh transition sound", 1.0),
+    "applause": ("audience applause and cheering", 2.5),
+    "ding": ("bright ding bell notification chime", 1.0),
+}
+
+async def get_sfx_bytes(name: str) -> Optional[bytes]:
+    if not name or name == "none" or name not in SFX_PROMPTS or not ELEVENLABS_API_KEY:
+        return None
+    doc = await db.sfx_library.find_one({"name": name}, {"_id": 0})
+    if doc:
+        return base64.b64decode(doc["data"])
+    try:
+        prompt, dur = SFX_PROMPTS[name]
+        el = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+        gen = el.text_to_sound_effects.convert(text=prompt, duration_seconds=dur, prompt_influence=0.5)
+        audio = b"".join(list(gen))
+        await db.sfx_library.insert_one({
+            "name": name, "data": base64.b64encode(audio).decode(),
+            "content_type": "audio/mpeg", "created_at": now_iso()})
+        await log_cost(None, "tts", 1, COST["tts_per_char"] * 40, f"sfx:{name}")
+        return audio
+    except Exception as e:
+        await log_failure("elevenlabs", "/sfx", e)
+        return None
+
 # ---------------- Scene image generation ----------------
-def build_scene_prompt(scene: dict, characters: List[dict]) -> str:
+def build_scene_prompt(scene: dict, char_map: Dict[str, str]) -> str:
+    cname = (scene.get("character_name") or "").strip()
     char_desc = ""
-    cname = scene.get("character_name", "")
-    for c in characters:
-        if c.get("name") == cname and c.get("description"):
-            char_desc = f" The character {cname}: {c['description']}."
-            break
+    dna = char_map.get(cname.lower()) if cname else None
+    if dna:
+        char_desc = f" The character {cname} MUST look EXACTLY the same every scene: {dna}."
     return (
         f"{scene.get('image_prompt','')}.{char_desc} "
-        "Flat vector cartoon illustration, bold clean outlines, vibrant saturated colors, "
+        "Consistent flat vector cartoon illustration, bold clean outlines, vibrant saturated colors, "
         "dynamic comedic composition, vertical 9:16 framing, no text, no watermark."
     )
 
@@ -388,8 +438,15 @@ async def generate_scene_image(project_id: str, index: int, req: SceneGenRequest
     if not project:
         raise HTTPException(404, "Project not found")
     try:
+        # canonical character map from DB (visual DNA) + fallback from request payload
+        db_chars = await db.characters.find({}, {"_id": 0}).to_list(200)
+        char_map = {c["name"].lower(): (c.get("visual_dna") or c.get("description", "")) for c in db_chars if c.get("name")}
+        for c in req.characters:
+            key = (c.get("name") or "").lower()
+            if key and key not in char_map and c.get("description"):
+                char_map[key] = c["description"]
         image_gen = OpenAIImageGeneration(api_key=EMERGENT_LLM_KEY)
-        prompt = build_scene_prompt(req.scene.model_dump(), req.characters)
+        prompt = build_scene_prompt(req.scene.model_dump(), char_map)
         images = await image_gen.generate_images(prompt=prompt, model="gpt-image-1", number_of_images=1)
         if not images:
             raise RuntimeError("No image returned")
@@ -513,9 +570,11 @@ async def _render_task(project_id: str):
                 continue
             img = await _asset_bytes(s["image_asset_id"])
             aud = await _asset_bytes(s.get("audio_asset_id"))
+            sfx = await get_sfx_bytes(s.get("sfx"))
             scenes_data.append({
                 "image_bytes": img,
                 "audio_bytes": aud,
+                "sfx_bytes": sfx,
                 "dialogue": s.get("dialogue", ""),
                 "camera_motion": s.get("camera_motion", "zoom_in"),
             })

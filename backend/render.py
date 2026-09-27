@@ -100,6 +100,12 @@ def _render_segment(scene, workdir, idx):
         with open(audio_path, "wb") as fh:
             fh.write(scene["audio_bytes"])
 
+    sfx_path = None
+    if scene.get("sfx_bytes"):
+        sfx_path = os.path.join(workdir, f"sfx_{idx}.mp3")
+        with open(sfx_path, "wb") as fh:
+            fh.write(scene["sfx_bytes"])
+
     dur = _duration(audio_path) if audio_path else None
     dur = max(1.8, (dur or 3.0) + 0.4)  # small tail after speech
     frames = round(dur * FPS)
@@ -109,23 +115,34 @@ def _render_segment(scene, workdir, idx):
 
     seg_path = os.path.join(workdir, f"seg_{idx}.mp4")
     zp = _zoompan(scene.get("camera_motion", "zoom_in"), frames)
-    vf = (
+    fc = (
         f"[0:v]scale={BASE_W}:{BASE_H}:force_original_aspect_ratio=increase,"
         f"crop={BASE_W}:{BASE_H},setsar=1,{zp}[bg];"
         f"[bg][1:v]overlay=0:0,format=yuv420p[v]"
     )
+    # inputs: 0=image, 1=subtitle, 2=voice/silent, [3=sfx]
     cmd = [FFMPEG, "-y", "-loop", "1", "-t", f"{dur}", "-i", img_path, "-i", sub_path]
     if audio_path:
         cmd += ["-i", audio_path]
-        amap = "2:a"
     else:
         cmd += ["-f", "lavfi", "-t", f"{dur}", "-i", "anullsrc=r=44100:cl=stereo"]
-        amap = "2:a"
+
+    if sfx_path:
+        cmd += ["-i", sfx_path]
+        fc += (
+            ";[3:a]volume=0.8,aformat=sample_rates=44100:channel_layouts=stereo[sfx];"
+            "[2:a]aformat=sample_rates=44100:channel_layouts=stereo[vox];"
+            "[vox][sfx]amix=inputs=2:duration=longest:normalize=0,apad[aout]"
+        )
+    else:
+        fc += ";[2:a]aformat=sample_rates=44100:channel_layouts=stereo,apad[aout]"
+    amap = "[aout]"
+
     cmd += [
-        "-filter_complex", vf, "-map", "[v]", "-map", amap,
+        "-filter_complex", fc, "-map", "[v]", "-map", amap,
         "-c:v", _video_encoder(), "-pix_fmt", "yuv420p", "-r", f"{FPS}",
         "-t", f"{dur}", "-c:a", "aac", "-ar", "44100", "-b:a", "128k",
-        "-shortest", seg_path,
+        seg_path,
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0 or not os.path.exists(seg_path):

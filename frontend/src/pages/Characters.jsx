@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
-import { Plus, Users, Trash2, RefreshCw, Mic, Loader2, ImageOff } from "lucide-react";
+import { Plus, Users, Trash2, RefreshCw, Mic, Loader2, ImageOff, Fingerprint } from "lucide-react";
 import { api, assetUrl } from "@/lib/api";
 import { useLang } from "@/i18n";
 import { Button } from "@/components/ui/button";
@@ -165,6 +165,16 @@ export default function Characters() {
                   </div>
                 )}
                 <p className="mt-2 text-xs text-muted-foreground line-clamp-2 min-h-[2rem]">{c.description}</p>
+                {c.visual_dna && (
+                  <details className="mt-2 group/dna" data-testid="character-visual-dna">
+                    <summary className="text-[10px] uppercase tracking-wide text-primary/80 cursor-pointer flex items-center gap-1 list-none">
+                      <Fingerprint className="w-3 h-3" /> {t("char_dna")}
+                    </summary>
+                    <p className="mt-1.5 text-[11px] text-muted-foreground leading-relaxed font-mono bg-[#0B0F17] rounded-lg p-2 border border-white/5">
+                      {c.visual_dna}
+                    </p>
+                  </details>
+                )}
                 <div className="flex gap-2 mt-3">
                   <Button data-testid="character-regen-image-button" size="sm" variant="outline" className="flex-1 gap-1 h-8 text-xs" onClick={() => regen(c.id)} disabled={regenId === c.id}>
                     {regenId === c.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />} {t("char_regen")}

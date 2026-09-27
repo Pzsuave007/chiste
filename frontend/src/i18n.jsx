@@ -105,6 +105,7 @@ const DICT = {
     char_save: "Guardar personaje",
     char_empty: "Sin personajes todavía.",
     char_regen: "Regenerar imagen",
+    char_dna: "ADN visual (consistencia)",
 
     // Cost tracker
     ct_title: "Seguimiento de costos y fallos",
@@ -230,6 +231,7 @@ const DICT = {
     char_save: "Save character",
     char_empty: "No characters yet.",
     char_regen: "Regenerate image",
+    char_dna: "Visual DNA (consistency)",
 
     ct_title: "Cost tracking & failures",
     ct_total: "Total studio spend",
