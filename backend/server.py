@@ -478,6 +478,55 @@ async def get_sfx_bytes(name: str) -> Optional[bytes]:
         await log_failure("elevenlabs", "/sfx", e)
         return None
 
+# ---------------- Music library (ElevenLabs compose) ----------------
+MUSIC_PRESETS = {
+    "comedy": ("upbeat quirky comedy cartoon background music, playful, light, fun, bouncy", "Comedia divertida"),
+    "quirky": ("whimsical playful xylophone and pizzicato strings, comedic, cheeky", "Juguetona"),
+    "happy": ("happy ukulele with claps, feel-good, sunny, positive", "Feliz / alegre"),
+    "lofi": ("chill lofi hip hop beat, relaxed, soft, mellow", "Lofi relajado"),
+    "suspense": ("light comedic suspense, sneaky tiptoe pizzicato, tension", "Suspenso ligero"),
+    "epic": ("triumphant uplifting cinematic orchestral, motivational", "Épica / motivacional"),
+}
+
+class MusicPresetReq(BaseModel):
+    preset_id: str
+
+@api_router.get("/music/library")
+async def music_library():
+    return [{"id": k, "name": v[1]} for k, v in MUSIC_PRESETS.items()]
+
+async def get_music_preset_asset(preset_id: str) -> Optional[str]:
+    doc = await db.music_library.find_one({"preset_id": preset_id}, {"_id": 0})
+    if doc:
+        return doc["asset_id"]
+    if preset_id not in MUSIC_PRESETS or not ELEVENLABS_API_KEY:
+        return None
+    prompt = MUSIC_PRESETS[preset_id][0]
+    def _call():
+        el = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+        return b"".join(list(el.music.compose(prompt=prompt, music_length_ms=22000, force_instrumental=True)))
+    audio = await asyncio.to_thread(_call)
+    asset_id = await save_asset("music", "audio/mpeg", audio)
+    await db.music_library.insert_one({"preset_id": preset_id, "asset_id": asset_id, "created_at": now_iso()})
+    await log_cost(None, "tts", 1, 0.02, f"music:{preset_id}")
+    return asset_id
+
+@api_router.post("/projects/{project_id}/music/preset")
+async def set_music_preset(project_id: str, req: MusicPresetReq):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(404, "Project not found")
+    try:
+        asset_id = await get_music_preset_asset(req.preset_id)
+    except Exception as e:
+        await log_failure("elevenlabs", "/music/preset", e, project_id)
+        raise HTTPException(502, "Music generation failed. Please retry.")
+    if not asset_id:
+        raise HTTPException(400, "Invalid preset or music not available")
+    await db.projects.update_one({"id": project_id}, {"$set": {
+        "music_asset_id": asset_id, "music_preset": req.preset_id, "updated_at": now_iso()}})
+    return {"music_asset_id": asset_id, "url": f"/api/assets/{asset_id}", "preset_id": req.preset_id}
+
 # ---------------- Scene image generation ----------------
 def build_scene_prompt(scene: dict, char_map: Dict[str, str], style: str = "comic") -> str:
     prefix = STYLE_PREFIXES.get(style, STYLE_PREFIXES["comic"])
@@ -646,12 +695,12 @@ async def upload_music(project_id: str, file: UploadFile = File(...)):
     if not data:
         raise HTTPException(400, "Empty file")
     asset_id = await save_asset("music", file.content_type or "audio/mpeg", data, project_id)
-    await db.projects.update_one({"id": project_id}, {"$set": {"music_asset_id": asset_id, "updated_at": now_iso()}})
+    await db.projects.update_one({"id": project_id}, {"$set": {"music_asset_id": asset_id, "music_preset": None, "updated_at": now_iso()}})
     return {"music_asset_id": asset_id, "url": f"/api/assets/{asset_id}"}
 
 @api_router.delete("/projects/{project_id}/music")
 async def remove_music(project_id: str):
-    await db.projects.update_one({"id": project_id}, {"$set": {"music_asset_id": None, "updated_at": now_iso()}})
+    await db.projects.update_one({"id": project_id}, {"$set": {"music_asset_id": None, "music_preset": None, "updated_at": now_iso()}})
     return {"ok": True}
 
 # ---------------- Local FFmpeg render (free, self-hosted) ----------------

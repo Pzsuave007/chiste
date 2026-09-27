@@ -42,6 +42,10 @@ export default function Studio() {
   const [laughIntensity, setLaughIntensity] = useState("medium");
   const [hasMusic, setHasMusic] = useState(false);
   const [uploadingMusic, setUploadingMusic] = useState(false);
+  const [musicAssetId, setMusicAssetId] = useState(null);
+  const [musicPreset, setMusicPreset] = useState("");
+  const [musicLibrary, setMusicLibrary] = useState([]);
+  const [loadingPreset, setLoadingPreset] = useState(false);
   const [jokeForm, setJokeForm] = useState({ topic: "standup", duration: 30, custom_joke: "" });
   const [selected, setSelected] = useState(0);
 
@@ -60,6 +64,8 @@ export default function Studio() {
     setMusicVolume(data.music_volume ?? 20);
     setLaughIntensity(data.laugh_intensity || "medium");
     setHasMusic(!!data.music_asset_id);
+    setMusicAssetId(data.music_asset_id || null);
+    setMusicPreset(data.music_preset || "");
     setJokeForm((f) => ({ ...f, topic: data.topic, duration: data.duration }));
     if (data.scenes?.length) setTab(data.status === "draft" ? "joke" : "script");
   }, [id]);
@@ -68,6 +74,7 @@ export default function Studio() {
     load();
     api.get("/characters").then((r) => setCharacters(r.data)).catch(() => {});
     api.get("/voices").then((r) => setVoices(r.data)).catch(() => {});
+    api.get("/music/library").then((r) => setMusicLibrary(r.data)).catch(() => {});
     return () => clearInterval(pollRef.current);
   }, [load]);
 
@@ -89,13 +96,30 @@ export default function Studio() {
 
   const commitMusicVolume = (v) => patchProject({ music_volume: v });
 
+  const chooseMusicPreset = async (pid) => {
+    setLoadingPreset(true);
+    try {
+      const { data } = await api.post(`/projects/${id}/music/preset`, { preset_id: pid });
+      setMusicAssetId(data.music_asset_id);
+      setMusicPreset(pid);
+      setHasMusic(true);
+      toast.success(t("music_added"));
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || t("t_error"));
+    } finally {
+      setLoadingPreset(false);
+    }
+  };
+
   const uploadMusic = async (file) => {
     if (!file) return;
     setUploadingMusic(true);
     try {
       const fd = new FormData();
       fd.append("file", file);
-      await api.post(`/projects/${id}/music`, fd, { headers: { "Content-Type": "multipart/form-data" } });
+      const { data } = await api.post(`/projects/${id}/music`, fd, { headers: { "Content-Type": "multipart/form-data" } });
+      setMusicAssetId(data.music_asset_id);
+      setMusicPreset("");
       setHasMusic(true);
       toast.success(t("music_added"));
     } catch {
@@ -108,6 +132,8 @@ export default function Studio() {
   const removeMusic = async () => {
     await api.delete(`/projects/${id}/music`);
     setHasMusic(false);
+    setMusicAssetId(null);
+    setMusicPreset("");
   };
 
   const saveScenes = async (newScenes) => {
@@ -493,28 +519,42 @@ export default function Studio() {
                     <div className="pt-4 border-t border-white/10 space-y-3">
                       <div>
                         <Label className="text-xs flex items-center gap-1.5"><Music className="w-3.5 h-3.5 text-secondary" /> {t("bg_music")}</Label>
-                        <div className="flex items-center gap-2 mt-1.5">
+                        <Select value={musicPreset} onValueChange={chooseMusicPreset} disabled={loadingPreset}>
+                          <SelectTrigger data-testid="music-preset-select" className="mt-1.5 bg-[#0B0F17] border-white/10 text-sm">
+                            <SelectValue placeholder={loadingPreset ? t("generating_music") : t("choose_music")} />
+                          </SelectTrigger>
+                          <SelectContent className="max-h-56">
+                            {musicLibrary.map((m) => <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                        <div className="flex items-center gap-2 mt-2">
+                          <span className="text-[11px] text-muted-foreground">{t("or_upload")}</span>
                           <input id="music-upload" type="file" accept="audio/*" className="hidden"
                             data-testid="music-upload-input"
                             onChange={(e) => uploadMusic(e.target.files?.[0])} />
-                          <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs flex-1" data-testid="music-upload-button"
+                          <Button size="sm" variant="outline" className="gap-1.5 h-7 text-xs" data-testid="music-upload-button"
                             onClick={() => document.getElementById("music-upload").click()} disabled={uploadingMusic}>
                             {uploadingMusic ? <Loader2 className="w-3 h-3 animate-spin" /> : <Music className="w-3 h-3" />}
-                            {hasMusic ? t("music_added") : t("upload_music")}
+                            {t("upload_music")}
                           </Button>
-                          {hasMusic && (
-                            <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400" onClick={removeMusic} data-testid="music-remove-button">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Button>
-                          )}
                         </div>
                         {hasMusic && (
-                          <div className="mt-2">
-                            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                              <span>{t("music_volume")}</span><span className="font-mono">{musicVolume}%</span>
+                          <div className="mt-2 space-y-2">
+                            <div className="flex items-center gap-2">
+                              {musicAssetId && (
+                                <audio data-testid="music-preview-audio" src={assetUrl(musicAssetId)} controls className="h-8 flex-1" style={{ maxWidth: "180px" }} />
+                              )}
+                              <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400" onClick={removeMusic} data-testid="music-remove-button">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
                             </div>
-                            <Slider data-testid="music-volume-slider" value={[musicVolume]} min={0} max={60} step={5}
-                              onValueChange={(v) => setMusicVolume(v[0])} onValueCommit={(v) => commitMusicVolume(v[0])} className="mt-1" />
+                            <div>
+                              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                                <span>{t("music_volume")}</span><span className="font-mono">{musicVolume}%</span>
+                              </div>
+                              <Slider data-testid="music-volume-slider" value={[musicVolume]} min={0} max={60} step={5}
+                                onValueChange={(v) => setMusicVolume(v[0])} onValueCommit={(v) => commitMusicVolume(v[0])} className="mt-1" />
+                            </div>
                           </div>
                         )}
                       </div>
