@@ -24,7 +24,7 @@ export default function Home() {
   const nav = useNavigate();
   const [projects, setProjects] = useState([]);
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ title: "", language: lang, topic: "standup", duration: 30 });
+  const [form, setForm] = useState({ title: "", language: lang, topic: "standup", duration: 30, art_style: "comic" });
   const [creating, setCreating] = useState(false);
 
   const load = useCallback(() => {
@@ -208,6 +208,16 @@ const NewProjectDialog = ({ open, setOpen, form, setForm, creating, create, lang
             <SelectTrigger data-testid="project-topic-select" className="mt-1.5 bg-[#0B0F17] border-white/10"><SelectValue /></SelectTrigger>
             <SelectContent>
               {TOPICS.map((tp) => <SelectItem key={tp.id} value={tp.id}>{tp[lang]}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label>{t("np_style")}</Label>
+          <Select value={form.art_style} onValueChange={(v) => setForm({ ...form, art_style: v })}>
+            <SelectTrigger data-testid="project-style-select" className="mt-1.5 bg-[#0B0F17] border-white/10"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="comic">{t("style_comic")}</SelectItem>
+              <SelectItem value="illustration">{t("style_illustration")}</SelectItem>
             </SelectContent>
           </Select>
         </div>

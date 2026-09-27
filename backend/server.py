@@ -111,6 +111,46 @@ async def llm_complete(system: str, prompt: str, session: str = "chiste") -> str
     resp = await chat.send_message(UserMessage(text=prompt))
     return resp if isinstance(resp, str) else str(resp)
 
+# ---------------- Image generation (gpt-image-1) ----------------
+STYLE_PREFIXES = {
+    "comic": (
+        "Modern digital comic book illustration. Bold, clean, crisp black ink outlines of even weight; "
+        "FULL COLOR with a natural, realistic color palette and true-to-life skin tones and natural lighting; "
+        "subtle Ben-Day halftone dot shading; smooth cel shading; sharp high-quality vector-like linework; "
+        "well-proportioned faces and correct, clean anatomy; dynamic polished composition. Professional comic-book look. "
+        "NOT oversaturated, NOT painterly, NOT faded, NOT sketchy, no cross-hatching. A single clear scene. "
+        "NO text, NO words, NO speech bubbles, NO captions, no logos, no watermarks."
+    ),
+    "illustration": (
+        "Editorial illustration, warm flat vector style, clean shapes, soft harmonious palette, subtle texture, "
+        "culturally relevant, no text, no words, no logos, no watermarks."
+    ),
+}
+
+async def gen_image_bytes(prompt: str, size: str = "1024x1536", quality: str = "medium") -> bytes:
+    """gpt-image-1 via Emergent proxy with portrait size support; falls back to library default on error."""
+    def _call():
+        import base64 as _b64, requests as _rq
+        from litellm import image_generation as _img
+        from emergentintegrations.llm.utils import get_integration_proxy_url
+        r = _img(model="openai/gpt-image-1", prompt=prompt, n=1, api_key=EMERGENT_LLM_KEY,
+                 api_base=get_integration_proxy_url() + "/llm", quality=quality, size=size)
+        d = r.data[0]
+        if getattr(d, "b64_json", None):
+            return _b64.b64decode(d.b64_json)
+        if getattr(d, "url", None):
+            return _rq.get(d.url).content
+        raise RuntimeError("Unexpected image response")
+    try:
+        return await asyncio.to_thread(_call)
+    except Exception as e:
+        logger.warning(f"portrait image gen failed ({e}); falling back to default size")
+        image_gen = OpenAIImageGeneration(api_key=EMERGENT_LLM_KEY)
+        imgs = await image_gen.generate_images(prompt=prompt, model="gpt-image-1", number_of_images=1)
+        if not imgs:
+            raise RuntimeError("No image returned")
+        return imgs[0]
+
 # ---------------- Models ----------------
 class JokeRequest(BaseModel):
     topic: str = "standup"
@@ -162,6 +202,7 @@ class ProjectCreate(BaseModel):
     language: str = "es"
     topic: str = "standup"
     duration: int = 30
+    art_style: str = "comic"
     joke: str = ""
     scenes: List[Scene] = []
 
@@ -270,17 +311,14 @@ async def make_visual_dna(name: str, description: str) -> str:
     except Exception:
         return description.strip()
 
-async def gen_character_image(description: str, name: str, color: str, project_id=None) -> str:
-    image_gen = OpenAIImageGeneration(api_key=EMERGENT_LLM_KEY)
+async def gen_character_image(description: str, name: str, color: str, style: str = "comic", project_id=None) -> str:
+    prefix = STYLE_PREFIXES.get(style, STYLE_PREFIXES["comic"])
     prompt = (
-        f"Full-body character reference sheet of a cartoon character named {name}. "
-        f"{description}. Flat vector cartoon style, bold clean outlines, vibrant colors, "
-        f"expressive face, plain light studio background, centered, high detail."
+        f"{prefix} Full-body character reference of a cartoon character named {name}: {description}. "
+        f"Full body visible, neutral friendly pose, centered on a plain light studio background."
     )
-    images = await image_gen.generate_images(prompt=prompt, model="gpt-image-1", number_of_images=1)
-    if not images:
-        raise RuntimeError("No image returned")
-    return await save_asset("character_image", "image/png", images[0], project_id)
+    img = await gen_image_bytes(prompt, size="1024x1536", quality="medium")
+    return await save_asset("character_image", "image/png", img, project_id)
 
 @api_router.get("/characters")
 async def list_characters():
@@ -420,17 +458,14 @@ async def get_sfx_bytes(name: str) -> Optional[bytes]:
         return None
 
 # ---------------- Scene image generation ----------------
-def build_scene_prompt(scene: dict, char_map: Dict[str, str]) -> str:
+def build_scene_prompt(scene: dict, char_map: Dict[str, str], style: str = "comic") -> str:
+    prefix = STYLE_PREFIXES.get(style, STYLE_PREFIXES["comic"])
     cname = (scene.get("character_name") or "").strip()
     char_desc = ""
     dna = char_map.get(cname.lower()) if cname else None
     if dna:
-        char_desc = f" The character {cname} MUST look EXACTLY the same every scene: {dna}."
-    return (
-        f"{scene.get('image_prompt','')}.{char_desc} "
-        "Consistent flat vector cartoon illustration, bold clean outlines, vibrant saturated colors, "
-        "dynamic comedic composition, vertical 9:16 framing, no text, no watermark."
-    )
+        char_desc = f" The character {cname} MUST look EXACTLY the same in every scene: {dna}."
+    return f"{prefix} {scene.get('image_prompt','')}.{char_desc} Vertical 9:16 composition."
 
 @api_router.post("/projects/{project_id}/scenes/{index}/generate-image")
 async def generate_scene_image(project_id: str, index: int, req: SceneGenRequest):
@@ -445,12 +480,10 @@ async def generate_scene_image(project_id: str, index: int, req: SceneGenRequest
             key = (c.get("name") or "").lower()
             if key and key not in char_map and c.get("description"):
                 char_map[key] = c["description"]
-        image_gen = OpenAIImageGeneration(api_key=EMERGENT_LLM_KEY)
-        prompt = build_scene_prompt(req.scene.model_dump(), char_map)
-        images = await image_gen.generate_images(prompt=prompt, model="gpt-image-1", number_of_images=1)
-        if not images:
-            raise RuntimeError("No image returned")
-        asset_id = await save_asset("scene_image", "image/png", images[0], project_id)
+        style = project.get("art_style", "comic")
+        prompt = build_scene_prompt(req.scene.model_dump(), char_map, style)
+        img = await gen_image_bytes(prompt, size="1024x1536", quality="medium")
+        asset_id = await save_asset("scene_image", "image/png", img, project_id)
         await _update_scene_field(project_id, index, "image_asset_id", asset_id)
         await log_cost(project_id, "image", 1, COST["image"], f"scene:{index}")
         return {"asset_id": asset_id, "url": f"/api/assets/{asset_id}"}
@@ -519,6 +552,7 @@ async def create_project(req: ProjectCreate):
         "language": req.language,
         "topic": req.topic,
         "duration": req.duration,
+        "art_style": req.art_style,
         "joke": req.joke,
         "scenes": [s.model_dump() for s in req.scenes],
         "status": "draft",
