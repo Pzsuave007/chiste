@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { motion } from "framer-motion";
 import {
   ArrowLeft, Sparkles, Loader2, Wand2, Image as ImageIcon, Mic, RefreshCw,
-  Check, Film, Download, PlayCircle, Plus, Trash2, ClipboardList, Rocket, CheckCircle2, Circle,
+  Check, Film, Download, PlayCircle, Plus, Trash2, ClipboardList, Rocket, CheckCircle2, Circle, Volume2,
 } from "lucide-react";
 import { api, assetUrl } from "@/lib/api";
 import { useLang, TOPICS, DURATIONS, CAMERA_MOTIONS, SFX } from "@/i18n";
@@ -36,6 +36,7 @@ export default function Studio() {
   const [tab, setTab] = useState("joke");
   const [scenes, setScenes] = useState([]);
   const [joke, setJoke] = useState("");
+  const [defaultVoice, setDefaultVoice] = useState("");
   const [jokeForm, setJokeForm] = useState({ topic: "standup", duration: 30, custom_joke: "" });
   const [selected, setSelected] = useState(0);
 
@@ -50,6 +51,7 @@ export default function Studio() {
     setProject(data);
     setScenes(data.scenes || []);
     setJoke(data.joke || "");
+    setDefaultVoice(data.default_voice_id || "");
     setJokeForm((f) => ({ ...f, topic: data.topic, duration: data.duration }));
     if (data.scenes?.length) setTab(data.status === "draft" ? "joke" : "script");
   }, [id]);
@@ -65,6 +67,11 @@ export default function Studio() {
     const { data } = await api.put(`/projects/${id}`, patch);
     setProject(data);
     return data;
+  };
+
+  const changeDefaultVoice = (v) => {
+    setDefaultVoice(v);
+    patchProject({ default_voice_id: v });
   };
 
   const saveScenes = async (newScenes) => {
@@ -209,6 +216,11 @@ export default function Studio() {
     }
   };
 
+  const approveAll = () => {
+    const ns = scenes.map((s) => (s.image_asset_id ? { ...s, approved: true } : s));
+    saveScenes(ns);
+  };
+
   const startRender = async () => {
     setBusy((b) => ({ ...b, render: true }));
     try {
@@ -238,6 +250,7 @@ export default function Studio() {
 
   const scene = scenes.find((s) => s.index === selected) || scenes[0];
   const imagesReady = scenes.length > 0 && scenes.every((s) => s.image_asset_id);
+  const allApproved = scenes.length > 0 && scenes.every((s) => s.image_asset_id && s.approved);
   const audioReady = scenes.length > 0 && scenes.filter((s) => s.dialogue).every((s) => s.audio_asset_id);
   const imgCount = scenes.filter((s) => s.image_asset_id).length;
   const estCost = (scenes.filter((s) => !s.image_asset_id).length * 0.04) +
@@ -366,80 +379,107 @@ export default function Studio() {
           </div>
         </TabsContent>
 
-        {/* ---------------- EXPORT ---------------- */}
+        {/* ---------------- REVIEW & APPROVE ---------------- */}
         <TabsContent value="export">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-7 space-y-5">
-              <div className="rounded-2xl border border-white/10 bg-[#131B2E] p-6">
-                <h3 className="font-display text-xl font-bold text-white mb-5 flex items-center gap-2">
-                  <ClipboardList className="w-5 h-5 text-secondary" /> {t("approval_flow")}
-                </h3>
-                <div className="space-y-3">
-                  <ApprovalStep done={scenes.length > 0} label={t("step_script")} />
-                  <ApprovalStep done={audioReady} label={t("step_audio")} />
-                  <ApprovalStep done={imagesReady} label={t("step_images")} />
-                  <ApprovalStep done={project.status === "completed"} label={t("step_render")} />
+          {project.video_url ? (
+            <div className="max-w-md mx-auto rounded-2xl border border-emerald-500/30 bg-[#131B2E] p-6 space-y-4">
+              <div className="text-center text-emerald-400 font-semibold flex items-center justify-center gap-2">
+                <CheckCircle2 className="w-5 h-5" /> {t("render_done")}
+              </div>
+              <video
+                data-testid="result-video-player"
+                src={assetUrl(project.render_id) || project.video_url}
+                controls
+                className="w-full aspect-[9/16] max-w-[300px] mx-auto rounded-2xl border-2 border-emerald-500/40 bg-black"
+              />
+              <a href={assetUrl(project.render_id) || project.video_url} download={`${project.title}.mp4`}>
+                <Button data-testid="project-card-download-button" className="w-full gap-2 font-semibold"><Download className="w-4 h-4" /> {t("download")}</Button>
+              </a>
+              <Button variant="outline" className="w-full gap-2" onClick={() => patchProject({ status: "approved", video_url: null })} data-testid="new-render-button">
+                <RefreshCw className="w-4 h-4" /> {t("re_edit")}
+              </Button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* review storyboard */}
+              <div className="lg:col-span-8 space-y-4">
+                <div>
+                  <h3 className="font-display text-xl font-bold text-white flex items-center gap-2">
+                    <ClipboardList className="w-5 h-5 text-secondary" /> {t("review_title")}
+                  </h3>
+                  <p className="text-sm text-muted-foreground mt-1">{t("review_sub")}</p>
                 </div>
 
-                <div className="mt-6 pt-6 border-t border-white/10 space-y-4">
-                  <Button data-testid="generate-all-button" onClick={generateAll} disabled={busy.all} variant="outline" className="w-full gap-2 font-semibold">
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={generateAll} disabled={busy.all} className="gap-1.5" data-testid="generate-all-button">
                     {busy.all ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
                     {busy.all ? `${t("generating")} ${progress}%` : t("gen_all")}
                   </Button>
-                  {busy.all && <Progress value={progress} className="h-2" />}
-
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">{imgCount} / {scenes.length} {t("scenes_ready")}</span>
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                      {t("est_cost")}: ${estCost.toFixed(2)}
-                    </span>
-                  </div>
-
-                  {!imagesReady && <p className="text-xs text-amber-400/80">{t("need_images")}</p>}
-
-                  <Button
-                    data-testid="export-video-creatomate-button"
-                    onClick={startRender}
-                    disabled={busy.render || imgCount === 0 || project.status === "rendering"}
-                    className="w-full gap-2 font-semibold text-base h-12 shadow-lg shadow-primary/30"
-                  >
-                    {busy.render || project.status === "rendering"
-                      ? <><Loader2 className="w-5 h-5 animate-spin" /> {t("rendering")}</>
-                      : <><Film className="w-5 h-5" /> {t("export_mp4")}</>}
+                  <Button size="sm" variant="outline" onClick={approveAll} className="gap-1.5" data-testid="approve-all-button">
+                    <Check className="w-4 h-4" /> {t("approve_all")}
                   </Button>
-                  <p className="text-[11px] text-emerald-400/80 text-center flex items-center justify-center gap-1">
-                    <CheckCircle2 className="w-3 h-3" /> {t("render_free")}
-                  </p>
+                </div>
+                {busy.all && <Progress value={progress} className="h-2" />}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {scenes.map((s) => (
+                    <ReviewCard
+                      key={s.index} s={s} t={t} total={scenes.length}
+                      onChange={(patch) => updateScene(s.index, patch)}
+                      onGenImage={() => generateImage(s.index)} onGenAudio={() => generateAudio(s.index)}
+                      genImg={genImg === s.index} genAud={genAud === s.index}
+                      onSaveLine={() => saveScenes(scenes)}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* produce panel */}
+              <div className="lg:col-span-4">
+                <div className="sticky top-20 space-y-4">
+                  <div className="rounded-2xl border border-white/10 bg-[#131B2E] p-5 space-y-4">
+                    <div className="space-y-3">
+                      <ApprovalStep done={scenes.length > 0} label={t("step_script")} />
+                      <ApprovalStep done={imagesReady} label={t("step_images")} />
+                      <ApprovalStep done={allApproved} label={t("step_approved")} />
+                      <ApprovalStep done={project.status === "completed"} label={t("step_render")} />
+                    </div>
+
+                    <div className="pt-4 border-t border-white/10">
+                      <Label className="text-xs flex items-center gap-1.5"><Mic className="w-3.5 h-3.5 text-accent" /> {t("default_voice")}</Label>
+                      <Select value={defaultVoice} onValueChange={changeDefaultVoice}>
+                        <SelectTrigger data-testid="default-voice-select" className="mt-1.5 bg-[#0B0F17] border-white/10 text-sm"><SelectValue placeholder={t("no_voice")} /></SelectTrigger>
+                        <SelectContent className="max-h-56">{voices.map((v) => <SelectItem key={v.voice_id} value={v.voice_id}>{v.name}</SelectItem>)}</SelectContent>
+                      </Select>
+                      <p className="mt-2 text-[11px] text-accent/80 flex items-center gap-1"><Volume2 className="w-3 h-3" /> {t("voice_auto")}</p>
+                    </div>
+
+                    <div className="flex items-center justify-between text-sm pt-2">
+                      <span className="text-muted-foreground">{imgCount} / {scenes.length} {t("scenes_ready")}</span>
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                        {t("est_cost")}: ${estCost.toFixed(2)}
+                      </span>
+                    </div>
+
+                    <Button
+                      data-testid="export-video-creatomate-button"
+                      onClick={startRender}
+                      disabled={busy.render || !allApproved || project.status === "rendering"}
+                      className="w-full gap-2 font-semibold text-base h-12 shadow-lg shadow-primary/30"
+                    >
+                      {busy.render || project.status === "rendering"
+                        ? <><Loader2 className="w-5 h-5 animate-spin" /> {t("rendering")}</>
+                        : <><Film className="w-5 h-5" /> {t("produce_final")}</>}
+                    </Button>
+                    {!allApproved && <p className="text-xs text-amber-400/80 text-center">{t("need_approve")}</p>}
+                    <p className="text-[11px] text-emerald-400/80 text-center flex items-center justify-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" /> {t("render_free")}
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
-
-            <div className="lg:col-span-5">
-              <div className="sticky top-20 rounded-2xl border border-white/10 bg-[#131B2E] p-5">
-                {project.video_url ? (
-                  <div className="space-y-4">
-                    <div className="text-center text-emerald-400 font-semibold flex items-center justify-center gap-2">
-                      <CheckCircle2 className="w-5 h-5" /> {t("render_done")}
-                    </div>
-                    <video
-                      data-testid="result-video-player"
-                      src={assetUrl(project.render_id) || project.video_url}
-                      controls
-                      className="w-full aspect-[9/16] max-w-[300px] mx-auto rounded-2xl border-2 border-emerald-500/40 bg-black"
-                    />
-                    <a href={assetUrl(project.render_id) || project.video_url} download={`${project.title}.mp4`}>
-                      <Button data-testid="project-card-download-button" className="w-full gap-2 font-semibold"><Download className="w-4 h-4" /> {t("download")}</Button>
-                    </a>
-                  </div>
-                ) : (
-                  <>
-                    <div className="text-xs uppercase tracking-widest text-muted-foreground mb-3 text-center">{t("preview")}</div>
-                    <VideoPreview scene={scene} index={selected} total={scenes.length} />
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
+          )}
         </TabsContent>
       </Tabs>
     </main>
@@ -450,6 +490,35 @@ const ApprovalStep = ({ done, label }) => (
   <div className="flex items-center gap-3">
     {done ? <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" /> : <Circle className="w-5 h-5 text-muted-foreground/40 shrink-0" />}
     <span className={done ? "text-white font-medium" : "text-muted-foreground"}>{label}</span>
+  </div>
+);
+
+const ReviewCard = ({ s, t, total, onChange, onGenImage, onGenAudio, genImg, genAud, onSaveLine }) => (
+  <div data-testid={`review-card-${s.index}`} className={`rounded-2xl border bg-[#1A243B] p-3 ${s.approved ? "border-emerald-500/40" : "border-white/10"}`}>
+    <VideoPreview scene={s} index={s.index} total={total} />
+    <div className="mt-3">
+      <Label className="text-xs">{t("edit_line")} · {t("scene")} {s.index + 1}</Label>
+      <Textarea
+        data-testid={`review-line-input-${s.index}`}
+        value={s.dialogue}
+        onChange={(e) => onChange({ dialogue: e.target.value })}
+        onBlur={onSaveLine}
+        rows={2}
+        className="mt-1 bg-[#0B0F17] border-white/10 text-sm"
+      />
+    </div>
+    <div className="flex flex-wrap items-center gap-2 mt-2">
+      <Button data-testid={`review-regen-image-${s.index}`} size="sm" variant="outline" className="gap-1.5 h-8 text-xs" onClick={onGenImage} disabled={genImg}>
+        {genImg ? <Loader2 className="w-3 h-3 animate-spin" /> : <ImageIcon className="w-3 h-3" />} {t("regen_image")}
+      </Button>
+      <Button data-testid={`review-gen-audio-${s.index}`} size="sm" variant="outline" className="gap-1.5 h-8 text-xs" onClick={onGenAudio} disabled={genAud || !s.dialogue}>
+        {genAud ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mic className="w-3 h-3" />} {t("gen_audio")}
+      </Button>
+      <label className="flex items-center gap-1.5 ml-auto cursor-pointer text-xs font-medium">
+        <Checkbox data-testid={`review-approve-${s.index}`} checked={s.approved} onCheckedChange={(v) => onChange({ approved: !!v })} disabled={!s.image_asset_id} />
+        {t("approve")}
+      </label>
+    </div>
   </div>
 );
 

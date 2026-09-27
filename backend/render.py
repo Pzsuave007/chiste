@@ -106,8 +106,17 @@ def _render_segment(scene, workdir, idx):
         with open(sfx_path, "wb") as fh:
             fh.write(scene["sfx_bytes"])
 
-    dur = _duration(audio_path) if audio_path else None
-    dur = max(1.8, (dur or 3.0) + 0.4)  # small tail after speech
+    vdur = _duration(audio_path) if audio_path else 0.0
+    sdur = _duration(sfx_path) if sfx_path else 0.0
+    gap = 0.25  # pause after the punchline before the reaction (drums/laughs)
+    if audio_path and sfx_path:
+        dur = max(1.8, vdur + gap + sdur + 0.2)
+    elif audio_path:
+        dur = max(1.8, vdur + 0.4)
+    elif sfx_path:
+        dur = max(1.5, sdur + 0.3)
+    else:
+        dur = 3.0
     frames = round(dur * FPS)
 
     sub_path = os.path.join(workdir, f"sub_{idx}.png")
@@ -129,8 +138,11 @@ def _render_segment(scene, workdir, idx):
 
     if sfx_path:
         cmd += ["-i", sfx_path]
+        # play the SFX (drums/laughs) AFTER the spoken line finishes
+        delay_ms = int((vdur + gap) * 1000) if audio_path else 0
         fc += (
-            ";[3:a]volume=0.8,aformat=sample_rates=44100:channel_layouts=stereo[sfx];"
+            f";[3:a]adelay={delay_ms}|{delay_ms},volume=0.95,"
+            "aformat=sample_rates=44100:channel_layouts=stereo[sfx];"
             "[2:a]aformat=sample_rates=44100:channel_layouts=stereo[vox];"
             "[vox][sfx]amix=inputs=2:duration=longest:normalize=0,apad[aout]"
         )

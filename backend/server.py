@@ -203,6 +203,7 @@ class ProjectCreate(BaseModel):
     topic: str = "standup"
     duration: int = 30
     art_style: str = "comic"
+    default_voice_id: Optional[str] = None
     joke: str = ""
     scenes: List[Scene] = []
 
@@ -211,6 +212,7 @@ class ProjectUpdate(BaseModel):
     joke: Optional[str] = None
     scenes: Optional[List[Scene]] = None
     status: Optional[str] = None
+    default_voice_id: Optional[str] = None
 
 class TTSRequest(BaseModel):
     text: str
@@ -288,6 +290,8 @@ async def generate_script(req: ScriptRequest):
                 image_prompt=s.get("image_prompt", ""),
             ).model_dump())
         await log_cost(None, "script", 1, COST["script"])
+        if scenes:
+            scenes[-1]["sfx"] = "punchline"  # drums + laughs at the punchline
         return {"characters": data.get("characters", []), "scenes": scenes}
     except HTTPException:
         raise
@@ -373,52 +377,48 @@ async def delete_character(char_id: str):
 # ---------------- ElevenLabs voices ----------------
 _voice_cache: Dict[str, Any] = {}
 
-@api_router.get("/voices")
-async def get_voices():
+async def fetch_voices() -> List[dict]:
     if _voice_cache.get("voices"):
         return _voice_cache["voices"]
     if not ELEVENLABS_API_KEY:
         return []
     try:
         el = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-        res = el.voices.get_all()
-        voices = []
-        for v in res.voices:
-            labels = getattr(v, "labels", {}) or {}
-            voices.append({
-                "voice_id": v.voice_id,
-                "name": v.name,
-                "preview_url": getattr(v, "preview_url", None),
-                "category": getattr(v, "category", None),
-                "labels": labels,
-            })
+        res = await asyncio.to_thread(el.voices.get_all)
+        voices = [{
+            "voice_id": v.voice_id,
+            "name": v.name,
+            "preview_url": getattr(v, "preview_url", None),
+            "category": getattr(v, "category", None),
+            "labels": getattr(v, "labels", {}) or {},
+        } for v in res.voices]
         _voice_cache["voices"] = voices
         return voices
     except Exception as e:
         await log_failure("elevenlabs", "/voices", e)
         return []
 
+async def tts_bytes(text: str, voice_id: str) -> bytes:
+    def _call():
+        from elevenlabs import VoiceSettings
+        el = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+        gen = el.text_to_speech.convert(
+            text=text, voice_id=voice_id, model_id="eleven_multilingual_v2",
+            voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.75, style=0.4, use_speaker_boost=True),
+        )
+        return b"".join(list(gen))
+    return await asyncio.to_thread(_call)
+
+@api_router.get("/voices")
+async def get_voices():
+    return await fetch_voices()
+
 @api_router.post("/tts/generate")
 async def generate_tts(req: TTSRequest):
     if not ELEVENLABS_API_KEY:
         raise HTTPException(400, "ElevenLabs API key not configured")
     try:
-        el = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-        from elevenlabs import VoiceSettings
-        audio_gen = el.text_to_speech.convert(
-            text=req.text,
-            voice_id=req.voice_id,
-            model_id="eleven_multilingual_v2",
-            voice_settings=VoiceSettings(
-                stability=req.stability,
-                similarity_boost=req.similarity_boost,
-                style=req.style,
-                use_speaker_boost=True,
-            ),
-        )
-        audio = b""
-        for chunk in audio_gen:
-            audio += chunk
+        audio = await tts_bytes(req.text, req.voice_id)
         asset_id = await save_asset("audio", "audio/mpeg", audio, req.project_id)
         await log_cost(req.project_id, "tts", len(req.text), len(req.text) * COST["tts_per_char"], "tts")
         return {"asset_id": asset_id, "url": f"/api/assets/{asset_id}"}
@@ -430,6 +430,7 @@ async def generate_tts(req: TTSRequest):
 SFX_PROMPTS = {
     "laugh": ("sitcom audience laughing, comedy laugh track", 2.5),
     "drum": ("comedy rimshot drum sting, ba dum tss", 1.5),
+    "punchline": ("a short comedy rimshot drum sting ba dum tss, immediately followed by a warm sitcom audience laughter", 3.5),
     "boing": ("cartoon boing spring sound effect", 1.2),
     "pop": ("cartoon pop bubble sound effect", 1.0),
     "whoosh": ("fast cartoon whoosh transition sound", 1.0),
@@ -508,15 +509,7 @@ async def generate_scene_audio(project_id: str, index: int, req: SceneGenRequest
     if not voice_id:
         raise HTTPException(400, "No voice assigned to this scene/character")
     try:
-        el = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-        from elevenlabs import VoiceSettings
-        audio_gen = el.text_to_speech.convert(
-            text=scene.dialogue, voice_id=voice_id, model_id="eleven_multilingual_v2",
-            voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.75, style=0.4, use_speaker_boost=True),
-        )
-        audio = b""
-        for chunk in audio_gen:
-            audio += chunk
+        audio = await tts_bytes(scene.dialogue, voice_id)
         asset_id = await save_asset("audio", "audio/mpeg", audio, project_id)
         await _update_scene_field(project_id, index, "audio_asset_id", asset_id)
         await _update_scene_field(project_id, index, "voice_id", voice_id)
@@ -553,6 +546,7 @@ async def create_project(req: ProjectCreate):
         "topic": req.topic,
         "duration": req.duration,
         "art_style": req.art_style,
+        "default_voice_id": req.default_voice_id,
         "joke": req.joke,
         "scenes": [s.model_dump() for s in req.scenes],
         "status": "draft",
@@ -595,9 +589,39 @@ async def _asset_bytes(asset_id: Optional[str]) -> Optional[bytes]:
     doc = await db.assets.find_one({"id": asset_id}, {"_id": 0})
     return base64.b64decode(doc["data"]) if doc else None
 
+async def _ensure_scene_audio(project: dict) -> dict:
+    """Guarantee every dialogue scene has a synchronized voice before rendering."""
+    if not ELEVENLABS_API_KEY:
+        return project
+    voices = await fetch_voices()
+    fallback = project.get("default_voice_id") or (voices[0]["voice_id"] if voices else None)
+    db_chars = await db.characters.find({}, {"_id": 0}).to_list(200)
+    char_voice = {c["name"].lower(): c.get("voice_id") for c in db_chars if c.get("name")}
+    scenes = project.get("scenes", [])
+    changed = False
+    for s in scenes:
+        if s.get("dialogue") and not s.get("audio_asset_id"):
+            vid = s.get("voice_id") or char_voice.get((s.get("character_name") or "").lower()) or fallback
+            if not vid:
+                continue
+            try:
+                audio = await tts_bytes(s["dialogue"], vid)
+                aid = await save_asset("audio", "audio/mpeg", audio, project["id"])
+                s["audio_asset_id"] = aid
+                s["voice_id"] = vid
+                changed = True
+                await log_cost(project["id"], "tts", len(s["dialogue"]),
+                               len(s["dialogue"]) * COST["tts_per_char"], f"auto-scene:{s.get('index')}")
+            except Exception as e:
+                await log_failure("elevenlabs", "/produce-audio", e, project["id"])
+    if changed:
+        await db.projects.update_one({"id": project["id"]}, {"$set": {"scenes": scenes, "updated_at": now_iso()}})
+    return project
+
 async def _render_task(project_id: str):
     try:
         project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+        project = await _ensure_scene_audio(project)  # auto-generate any missing voices, synced per scene
         scenes_data = []
         for s in project.get("scenes", []):
             if not s.get("image_asset_id"):
