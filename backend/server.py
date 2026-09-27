@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Request, UploadFile, File
 from fastapi.responses import Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -151,6 +151,19 @@ async def gen_image_bytes(prompt: str, size: str = "1024x1536", quality: str = "
             raise RuntimeError("No image returned")
         return imgs[0]
 
+async def edit_image_bytes(ref_bytes: bytes, prompt: str, size: str = "1024x1536", quality: str = "medium") -> bytes:
+    """gpt-image-1 image edit: keeps the reference character consistent in a new scene."""
+    def _call():
+        import base64 as _b64, io as _io
+        from litellm import image_edit as _edit
+        from emergentintegrations.llm.utils import get_integration_proxy_url
+        r = _edit(image=("ref.png", _io.BytesIO(ref_bytes), "image/png"), prompt=prompt,
+                  model="gpt-image-1", api_key=EMERGENT_LLM_KEY,
+                  api_base=get_integration_proxy_url() + "/llm", size=size, quality=quality,
+                  custom_llm_provider="openai")
+        return _b64.b64decode(r.data[0].b64_json)
+    return await asyncio.to_thread(_call)
+
 # ---------------- Models ----------------
 class JokeRequest(BaseModel):
     topic: str = "standup"
@@ -204,6 +217,8 @@ class ProjectCreate(BaseModel):
     duration: int = 30
     art_style: str = "comic"
     default_voice_id: Optional[str] = None
+    music_volume: int = 20
+    laugh_intensity: str = "medium"
     joke: str = ""
     scenes: List[Scene] = []
 
@@ -213,6 +228,8 @@ class ProjectUpdate(BaseModel):
     scenes: Optional[List[Scene]] = None
     status: Optional[str] = None
     default_voice_id: Optional[str] = None
+    music_volume: Optional[int] = None
+    laugh_intensity: Optional[str] = None
 
 class TTSRequest(BaseModel):
     text: str
@@ -290,8 +307,9 @@ async def generate_script(req: ScriptRequest):
                 image_prompt=s.get("image_prompt", ""),
             ).model_dump())
         await log_cost(None, "script", 1, COST["script"])
-        if scenes:
-            scenes[-1]["sfx"] = "punchline"  # drums + laughs at the punchline
+        # keep sound effects only at the end: silence between scenes, punchline (drums+laughs) at the last
+        for i, s in enumerate(scenes):
+            s["sfx"] = "punchline" if i == len(scenes) - 1 else "none"
         return {"characters": data.get("characters", []), "scenes": scenes}
     except HTTPException:
         raise
@@ -468,24 +486,55 @@ def build_scene_prompt(scene: dict, char_map: Dict[str, str], style: str = "comi
         char_desc = f" The character {cname} MUST look EXACTLY the same in every scene: {dna}."
     return f"{prefix} {scene.get('image_prompt','')}.{char_desc} Vertical 9:16 composition."
 
+def build_edit_prompt(scene: dict, cname: str, style: str = "comic") -> str:
+    prefix = STYLE_PREFIXES.get(style, STYLE_PREFIXES["comic"])
+    return (
+        f"{prefix} Keep the SAME character{(' ' + cname) if cname else ''} from the reference image: "
+        "identical face, colors, markings, outfit, proportions and art style. "
+        f"New scene: {scene.get('image_prompt','')}. "
+        "Only change the pose, expression and background to fit the scene. "
+        "NO text, NO letters, NO words. Vertical 9:16 composition."
+    )
+
 @api_router.post("/projects/{project_id}/scenes/{index}/generate-image")
 async def generate_scene_image(project_id: str, index: int, req: SceneGenRequest):
     project = await db.projects.find_one({"id": project_id}, {"_id": 0})
     if not project:
         raise HTTPException(404, "Project not found")
     try:
-        # canonical character map from DB (visual DNA) + fallback from request payload
-        db_chars = await db.characters.find({}, {"_id": 0}).to_list(200)
-        char_map = {c["name"].lower(): (c.get("visual_dna") or c.get("description", "")) for c in db_chars if c.get("name")}
-        for c in req.characters:
-            key = (c.get("name") or "").lower()
-            if key and key not in char_map and c.get("description"):
-                char_map[key] = c["description"]
         style = project.get("art_style", "comic")
-        prompt = build_scene_prompt(req.scene.model_dump(), char_map, style)
-        img = await gen_image_bytes(prompt, size="1024x1536", quality="medium")
+        cname = (req.scene.character_name or "").strip()
+        ckey = cname.lower()
+        # find an anchor reference image for this character (library ref or previously generated in this project)
+        ref_asset_id = None
+        char_map = {}
+        if cname:
+            db_char = await db.characters.find_one({"name": cname}, {"_id": 0})
+            if db_char:
+                ref_asset_id = db_char.get("reference_image_asset_id")
+                char_map[ckey] = db_char.get("visual_dna") or db_char.get("description", "")
+            if not ref_asset_id:
+                ref_asset_id = (project.get("char_refs") or {}).get(ckey)
+        for c in req.characters:
+            k = (c.get("name") or "").lower()
+            if k and k not in char_map and c.get("description"):
+                char_map[k] = c["description"]
+
+        ref_bytes = await _asset_bytes(ref_asset_id) if ref_asset_id else None
+        if ref_bytes:
+            prompt = build_edit_prompt(req.scene.model_dump(), cname, style)
+            img = await edit_image_bytes(ref_bytes, prompt)
+        else:
+            prompt = build_scene_prompt(req.scene.model_dump(), char_map, style)
+            img = await gen_image_bytes(prompt, size="1024x1536", quality="medium")
+
         asset_id = await save_asset("scene_image", "image/png", img, project_id)
         await _update_scene_field(project_id, index, "image_asset_id", asset_id)
+        # lock this character's look for later scenes (anchor) if not already anchored
+        if cname and not ref_asset_id:
+            char_refs = project.get("char_refs") or {}
+            char_refs[ckey] = asset_id
+            await db.projects.update_one({"id": project_id}, {"$set": {"char_refs": char_refs}})
         await log_cost(project_id, "image", 1, COST["image"], f"scene:{index}")
         return {"asset_id": asset_id, "url": f"/api/assets/{asset_id}"}
     except Exception as e:
@@ -547,6 +596,10 @@ async def create_project(req: ProjectCreate):
         "duration": req.duration,
         "art_style": req.art_style,
         "default_voice_id": req.default_voice_id,
+        "music_asset_id": None,
+        "music_volume": req.music_volume,
+        "laugh_intensity": req.laugh_intensity,
+        "char_refs": {},
         "joke": req.joke,
         "scenes": [s.model_dump() for s in req.scenes],
         "status": "draft",
@@ -580,6 +633,23 @@ async def update_project(project_id: str, req: ProjectUpdate):
 @api_router.delete("/projects/{project_id}")
 async def delete_project(project_id: str):
     await db.projects.delete_one({"id": project_id})
+    return {"ok": True}
+
+@api_router.post("/projects/{project_id}/music")
+async def upload_music(project_id: str, file: UploadFile = File(...)):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(404, "Project not found")
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Empty file")
+    asset_id = await save_asset("music", file.content_type or "audio/mpeg", data, project_id)
+    await db.projects.update_one({"id": project_id}, {"$set": {"music_asset_id": asset_id, "updated_at": now_iso()}})
+    return {"music_asset_id": asset_id, "url": f"/api/assets/{asset_id}"}
+
+@api_router.delete("/projects/{project_id}/music")
+async def remove_music(project_id: str):
+    await db.projects.update_one({"id": project_id}, {"$set": {"music_asset_id": None, "updated_at": now_iso()}})
     return {"ok": True}
 
 # ---------------- Local FFmpeg render (free, self-hosted) ----------------
@@ -622,6 +692,8 @@ async def _render_task(project_id: str):
     try:
         project = await db.projects.find_one({"id": project_id}, {"_id": 0})
         project = await _ensure_scene_audio(project)  # auto-generate any missing voices, synced per scene
+        intensity = {"soft": 0.55, "medium": 0.9, "loud": 1.35}.get(project.get("laugh_intensity", "medium"), 0.9)
+        laugh_sfx = {"laugh", "punchline", "applause"}
         scenes_data = []
         for s in project.get("scenes", []):
             if not s.get("image_asset_id"):
@@ -629,14 +701,17 @@ async def _render_task(project_id: str):
             img = await _asset_bytes(s["image_asset_id"])
             aud = await _asset_bytes(s.get("audio_asset_id"))
             sfx = await get_sfx_bytes(s.get("sfx"))
+            sfx_name = s.get("sfx")
             scenes_data.append({
                 "image_bytes": img,
                 "audio_bytes": aud,
                 "sfx_bytes": sfx,
+                "sfx_volume": intensity if sfx_name in laugh_sfx else 0.85,
                 "dialogue": s.get("dialogue", ""),
                 "camera_motion": s.get("camera_motion", "zoom_in"),
             })
-        mp4 = await asyncio.to_thread(render_video, scenes_data)
+        music = await _asset_bytes(project.get("music_asset_id"))
+        mp4 = await asyncio.to_thread(render_video, scenes_data, music, project.get("music_volume", 20))
         asset_id = await save_asset("video", "video/mp4", mp4, project_id)
         await db.projects.update_one({"id": project_id}, {"$set": {
             "status": "completed", "video_url": f"/api/assets/{asset_id}",

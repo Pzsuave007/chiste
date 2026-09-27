@@ -6,8 +6,11 @@ import os
 import re
 import subprocess
 import tempfile
+import logging
 import imageio_ffmpeg
 from PIL import Image, ImageDraw, ImageFont
+
+logger = logging.getLogger(__name__)
 
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 FONT_PATH = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
@@ -140,8 +143,9 @@ def _render_segment(scene, workdir, idx):
         cmd += ["-i", sfx_path]
         # play the SFX (drums/laughs) AFTER the spoken line finishes
         delay_ms = int((vdur + gap) * 1000) if audio_path else 0
+        vol = scene.get("sfx_volume", 0.95)
         fc += (
-            f";[3:a]adelay={delay_ms}|{delay_ms},volume=0.95,"
+            f";[3:a]adelay={delay_ms}|{delay_ms},volume={vol},"
             "aformat=sample_rates=44100:channel_layouts=stereo[sfx];"
             "[2:a]aformat=sample_rates=44100:channel_layouts=stereo[vox];"
             "[vox][sfx]amix=inputs=2:duration=longest:normalize=0,apad[aout]"
@@ -162,8 +166,9 @@ def _render_segment(scene, workdir, idx):
     return seg_path
 
 
-def render_video(scenes):
-    """scenes: list of dict {image_bytes, audio_bytes|None, dialogue, camera_motion}.
+def render_video(scenes, music_bytes=None, music_volume=20):
+    """scenes: list of dict {image_bytes, audio_bytes|None, sfx_bytes|None, sfx_volume, dialogue, camera_motion}.
+    Optional background music (bytes) mixed under the whole video at music_volume (0-100).
     Returns MP4 bytes of the assembled 9:16 video."""
     scenes = [s for s in scenes if s.get("image_bytes")]
     if not scenes:
@@ -190,5 +195,26 @@ def render_video(scenes):
             )
             if res.returncode != 0 or not os.path.exists(out_path):
                 raise RuntimeError(f"concat failed: {res.stderr[-600:]}")
+
+        if music_bytes and music_volume and music_volume > 0:
+            music_path = os.path.join(workdir, "music.mp3")
+            with open(music_path, "wb") as fh:
+                fh.write(music_bytes)
+            mixed = os.path.join(workdir, "final_music.mp4")
+            vol = max(0.0, min(1.0, music_volume / 100.0))
+            res = subprocess.run(
+                [FFMPEG, "-y", "-i", out_path, "-stream_loop", "-1", "-i", music_path,
+                 "-filter_complex",
+                 f"[1:a]volume={vol},aformat=sample_rates=44100:channel_layouts=stereo[bg];"
+                 "[0:a][bg]amix=inputs=2:duration=first:normalize=0[a]",
+                 "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
+                 "-movflags", "+faststart", mixed],
+                capture_output=True, text=True,
+            )
+            if res.returncode == 0 and os.path.exists(mixed):
+                out_path = mixed
+            else:
+                logger.warning(f"music mix failed, using video without music: {res.stderr[-300:]}")
+
         with open(out_path, "rb") as fh:
             return fh.read()

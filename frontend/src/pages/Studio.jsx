@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { motion } from "framer-motion";
 import {
   ArrowLeft, Sparkles, Loader2, Wand2, Image as ImageIcon, Mic, RefreshCw,
-  Check, Film, Download, PlayCircle, Plus, Trash2, ClipboardList, Rocket, CheckCircle2, Circle, Volume2,
+  Check, Film, Download, PlayCircle, Plus, Trash2, ClipboardList, Rocket, CheckCircle2, Circle, Volume2, Music,
 } from "lucide-react";
 import { api, assetUrl } from "@/lib/api";
 import { useLang, TOPICS, DURATIONS, CAMERA_MOTIONS, SFX } from "@/i18n";
@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
+import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -37,6 +38,10 @@ export default function Studio() {
   const [scenes, setScenes] = useState([]);
   const [joke, setJoke] = useState("");
   const [defaultVoice, setDefaultVoice] = useState("");
+  const [musicVolume, setMusicVolume] = useState(20);
+  const [laughIntensity, setLaughIntensity] = useState("medium");
+  const [hasMusic, setHasMusic] = useState(false);
+  const [uploadingMusic, setUploadingMusic] = useState(false);
   const [jokeForm, setJokeForm] = useState({ topic: "standup", duration: 30, custom_joke: "" });
   const [selected, setSelected] = useState(0);
 
@@ -52,6 +57,9 @@ export default function Studio() {
     setScenes(data.scenes || []);
     setJoke(data.joke || "");
     setDefaultVoice(data.default_voice_id || "");
+    setMusicVolume(data.music_volume ?? 20);
+    setLaughIntensity(data.laugh_intensity || "medium");
+    setHasMusic(!!data.music_asset_id);
     setJokeForm((f) => ({ ...f, topic: data.topic, duration: data.duration }));
     if (data.scenes?.length) setTab(data.status === "draft" ? "joke" : "script");
   }, [id]);
@@ -72,6 +80,34 @@ export default function Studio() {
   const changeDefaultVoice = (v) => {
     setDefaultVoice(v);
     patchProject({ default_voice_id: v });
+  };
+
+  const changeLaugh = (v) => {
+    setLaughIntensity(v);
+    patchProject({ laugh_intensity: v });
+  };
+
+  const commitMusicVolume = (v) => patchProject({ music_volume: v });
+
+  const uploadMusic = async (file) => {
+    if (!file) return;
+    setUploadingMusic(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      await api.post(`/projects/${id}/music`, fd, { headers: { "Content-Type": "multipart/form-data" } });
+      setHasMusic(true);
+      toast.success(t("music_added"));
+    } catch {
+      toast.error(t("t_error"));
+    } finally {
+      setUploadingMusic(false);
+    }
+  };
+
+  const removeMusic = async () => {
+    await api.delete(`/projects/${id}/music`);
+    setHasMusic(false);
   };
 
   const saveScenes = async (newScenes) => {
@@ -452,6 +488,48 @@ export default function Studio() {
                         <SelectContent className="max-h-56">{voices.map((v) => <SelectItem key={v.voice_id} value={v.voice_id}>{v.name}</SelectItem>)}</SelectContent>
                       </Select>
                       <p className="mt-2 text-[11px] text-accent/80 flex items-center gap-1"><Volume2 className="w-3 h-3" /> {t("voice_auto")}</p>
+                    </div>
+
+                    <div className="pt-4 border-t border-white/10 space-y-3">
+                      <div>
+                        <Label className="text-xs flex items-center gap-1.5"><Music className="w-3.5 h-3.5 text-secondary" /> {t("bg_music")}</Label>
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <input id="music-upload" type="file" accept="audio/*" className="hidden"
+                            data-testid="music-upload-input"
+                            onChange={(e) => uploadMusic(e.target.files?.[0])} />
+                          <Button size="sm" variant="outline" className="gap-1.5 h-8 text-xs flex-1" data-testid="music-upload-button"
+                            onClick={() => document.getElementById("music-upload").click()} disabled={uploadingMusic}>
+                            {uploadingMusic ? <Loader2 className="w-3 h-3 animate-spin" /> : <Music className="w-3 h-3" />}
+                            {hasMusic ? t("music_added") : t("upload_music")}
+                          </Button>
+                          {hasMusic && (
+                            <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400" onClick={removeMusic} data-testid="music-remove-button">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                        {hasMusic && (
+                          <div className="mt-2">
+                            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                              <span>{t("music_volume")}</span><span className="font-mono">{musicVolume}%</span>
+                            </div>
+                            <Slider data-testid="music-volume-slider" value={[musicVolume]} min={0} max={60} step={5}
+                              onValueChange={(v) => setMusicVolume(v[0])} onValueCommit={(v) => commitMusicVolume(v[0])} className="mt-1" />
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Label className="text-xs">{t("laugh_intensity")}</Label>
+                        <Select value={laughIntensity} onValueChange={changeLaugh}>
+                          <SelectTrigger data-testid="laugh-intensity-select" className="mt-1.5 bg-[#0B0F17] border-white/10 text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="soft">{t("laugh_soft")}</SelectItem>
+                            <SelectItem value="medium">{t("laugh_medium")}</SelectItem>
+                            <SelectItem value="loud">{t("laugh_loud")}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
 
                     <div className="flex items-center justify-between text-sm pt-2">
