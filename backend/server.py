@@ -177,7 +177,9 @@ class ScriptRequest(BaseModel):
     joke: str
     language: str = "es"
     duration: int = 30
+    topic: str = ""
     characters: List[Dict[str, Any]] = []
+    comedian: Optional[Dict[str, Any]] = None
 
 class Character(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -270,9 +272,74 @@ async def generate_joke(req: JokeRequest):
         await log_failure("openai", "/jokes/generate", e)
         raise HTTPException(502, "Joke generation failed. Please retry.")
 
+# ---------------- Stand-up generation (single comedian, no story) ----------------
+async def generate_standup_script(req: ScriptRequest):
+    lang = "Spanish" if req.language == "es" else "English"
+    n_beats = max(2, min(3, round(req.duration / 12)))
+    comedian = req.comedian or {}
+    cname = (comedian.get("name") or "").strip()
+    cdesc = (comedian.get("description") or comedian.get("visual_dna") or "").strip()
+    if cname and cdesc:
+        who = (f"The comedian is an EXISTING character named {cname}: {cdesc}. "
+               "Keep this exact name and look; do NOT invent a new one.")
+    elif cname:
+        who = f"The comedian is named {cname}. Invent a short cartoon visual description for them."
+    else:
+        who = "Invent ONE cartoon stand-up comedian (give them a name and a short visual description)."
+    system = (
+        "You write a stand-up comedy bit for a vertical cartoon short. A SINGLE cartoon comedian stands at a "
+        "microphone on a small comedy-club stage and tells the whole joke straight to the audience. "
+        "There is NO story, NO other characters and NO location changes: the same comedian on the same stage "
+        "the entire time. You always respond with strict JSON."
+    )
+    prompt = (
+        f"Joke (in {lang}):\n{req.joke}\n\n{who}\n"
+        f"Split the delivery into {n_beats} short beats (setup building to the punchline) for a ~{req.duration}s clip. "
+        "Every beat is the SAME comedian at the SAME microphone on the SAME stage; only the facial expression and "
+        "hand gesture change between beats.\n"
+        "Return STRICT JSON:\n"
+        '{"comedian":{"name":"","description":"cartoon visual description"},'
+        '"scenes":[{"dialogue":"","expression":"facial expression + hand gesture for this beat"}]}\n'
+        f"Write all dialogue in {lang}. Keep each line short and punchy. The LAST beat is the punchline. Return ONLY JSON."
+    )
+    try:
+        raw = await llm_complete(system, prompt, "standup-gen")
+        data = json.loads(strip_json(raw))
+        com = data.get("comedian", {}) or {}
+        final_name = cname or com.get("name", "Comediante")
+        final_desc = cdesc or com.get("description", "")
+        beats = data.get("scenes", []) or []
+        scenes = []
+        for i, b in enumerate(beats):
+            expr = (b.get("expression") or "").strip()
+            img_prompt = (
+                f"A single cartoon stand-up comedian named {final_name}: {final_desc}. "
+                "Standing at a vintage microphone on a small comedy-club stage, exposed red brick wall background, "
+                "warm spotlight from above, a wooden stool nearby. Medium shot facing the audience. "
+                f"Expression and gesture: {expr}."
+            )
+            scenes.append(Scene(
+                index=i,
+                character_name=final_name,
+                dialogue=b.get("dialogue", ""),
+                is_narration=False,
+                camera_motion="zoom_in" if i == 0 else "static",
+                sfx="punchline" if i == len(beats) - 1 else "none",
+                image_prompt=img_prompt,
+            ).model_dump())
+        await log_cost(None, "script", 1, COST["script"], "standup")
+        return {"characters": [{"name": final_name, "description": final_desc}], "scenes": scenes}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await log_failure("openai", "/scripts/generate (standup)", e)
+        raise HTTPException(502, "Script generation failed. Please retry.")
+
 # ---------------- Script generation ----------------
 @api_router.post("/scripts/generate")
 async def generate_script(req: ScriptRequest):
+    if req.topic == "standup":
+        return await generate_standup_script(req)
     lang = "Spanish" if req.language == "es" else "English"
     n_scenes = max(2, min(6, round(req.duration / 8)))
     char_hint = ""
@@ -464,6 +531,22 @@ async def get_sfx_bytes(name: str) -> Optional[bytes]:
     doc = await db.sfx_library.find_one({"name": name}, {"_id": 0})
     if doc:
         return base64.b64decode(doc["data"])
+    # "punchline" = reliable rimshot + audible laughter, built by concatenating the two effects
+    if name == "punchline":
+        try:
+            from render import concat_audio_bytes
+            drum = await get_sfx_bytes("drum")
+            laugh = await get_sfx_bytes("laugh")
+            combined = await asyncio.to_thread(concat_audio_bytes, [drum, laugh], 0.15)
+            if not combined:
+                return laugh or drum
+            await db.sfx_library.insert_one({
+                "name": "punchline", "data": base64.b64encode(combined).decode(),
+                "content_type": "audio/mpeg", "created_at": now_iso()})
+            return combined
+        except Exception as e:
+            await log_failure("elevenlabs", "/sfx-punchline", e)
+            return None
     try:
         prompt, dur = SFX_PROMPTS[name]
         el = ElevenLabs(api_key=ELEVENLABS_API_KEY)
@@ -793,6 +876,14 @@ async def render_status(project_id: str):
     if not project:
         raise HTTPException(404, "Project not found")
     return {"status": project.get("status", "draft"), "video_url": project.get("video_url")}
+
+@api_router.post("/projects/{project_id}/reset-export")
+async def reset_export(project_id: str):
+    r = await db.projects.update_one({"id": project_id}, {"$set": {
+        "video_url": None, "render_id": None, "status": "approved", "updated_at": now_iso()}})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Project not found")
+    return await db.projects.find_one({"id": project_id}, {"_id": 0})
 
 # ---------------- Cost & failures ----------------
 @api_router.get("/costs/summary")

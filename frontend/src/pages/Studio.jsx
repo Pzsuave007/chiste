@@ -47,6 +47,7 @@ export default function Studio() {
   const [musicLibrary, setMusicLibrary] = useState([]);
   const [loadingPreset, setLoadingPreset] = useState(false);
   const [jokeForm, setJokeForm] = useState({ topic: "standup", duration: 30, custom_joke: "" });
+  const [standupCharId, setStandupCharId] = useState("__ai__");
   const [selected, setSelected] = useState(0);
 
   const [busy, setBusy] = useState({ joke: false, script: false, all: false, render: false });
@@ -163,9 +164,14 @@ export default function Studio() {
     setBusy((b) => ({ ...b, script: true }));
     try {
       await patchProject({ joke });
+      const comedianChar = characters.find((c) => c.id === standupCharId);
       const { data } = await api.post("/scripts/generate", {
         joke, language: project.language, duration: jokeForm.duration,
+        topic: jokeForm.topic,
         characters: characters.map((c) => ({ name: c.name, description: c.description })),
+        comedian: jokeForm.topic === "standup" && comedianChar
+          ? { name: comedianChar.name, description: comedianChar.visual_dna || comedianChar.description }
+          : null,
       });
       // attach character voices by name match
       const enriched = data.scenes.map((s, i) => {
@@ -187,7 +193,21 @@ export default function Studio() {
 
   // ---------- Scene editing ----------
   const updateScene = (index, patch) => {
-    setScenes((prev) => prev.map((s) => (s.index === index ? { ...s, ...patch } : s)));
+    setScenes((prev) => prev.map((s) => {
+      if (s.index !== index) return s;
+      const ns = { ...s, ...patch };
+      // editing the dialogue invalidates the old voice so it re-syncs on the next export
+      if ("dialogue" in patch && patch.dialogue !== s.dialogue) ns.audio_asset_id = null;
+      return ns;
+    }));
+  };
+
+  const resetExport = async () => {
+    const { data } = await api.post(`/projects/${id}/reset-export`);
+    setProject(data);
+    setScenes(data.scenes || []);
+    setTab("export");
+    toast.success(t("re_edit_done"));
   };
 
   const assignCharacter = (index, name) => {
@@ -364,6 +384,19 @@ export default function Studio() {
                   </Select>
                 </div>
               </div>
+              {jokeForm.topic === "standup" && (
+                <div>
+                  <Label>{t("standup_comedian")}</Label>
+                  <Select value={standupCharId} onValueChange={setStandupCharId}>
+                    <SelectTrigger data-testid="standup-comedian-select" className="mt-1.5 bg-[#0B0F17] border-white/10"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__ai__">{t("standup_ai")}</SelectItem>
+                      {characters.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">{t("standup_hint")}</p>
+                </div>
+              )}
               <Button data-testid="joke-generator-trigger" onClick={generateJoke} disabled={busy.joke} className="gap-2 font-semibold">
                 {busy.joke ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
                 {busy.joke ? t("generating") : t("joke_generate")}
@@ -457,7 +490,7 @@ export default function Studio() {
               <a href={assetUrl(project.render_id) || project.video_url} download={`${project.title}.mp4`}>
                 <Button data-testid="project-card-download-button" className="w-full gap-2 font-semibold"><Download className="w-4 h-4" /> {t("download")}</Button>
               </a>
-              <Button variant="outline" className="w-full gap-2" onClick={() => patchProject({ status: "approved", video_url: null })} data-testid="new-render-button">
+              <Button variant="outline" className="w-full gap-2" onClick={resetExport} data-testid="new-render-button">
                 <RefreshCw className="w-4 h-4" /> {t("re_edit")}
               </Button>
             </div>

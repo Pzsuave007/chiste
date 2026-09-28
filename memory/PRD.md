@@ -34,6 +34,12 @@ Joke gen, script/scene breakdown, character library, scene image gen, voices, st
 - Project library (save/reopen/delete), cost summary dashboard, API failure log.
 - Bilingual ES/EN toggle across UI.
 
+## Implemented (2026-06) — later session
+- Re-export/re-edit flow: `/projects/{id}/reset-export` clears stale video state; editing dialogue clears stale audio.
+- Built-in ElevenLabs music library (presets) + volume control; punchline SFX (drums+laughs) at end of joke.
+- Character consistency via anchor image (scene 0 text-to-image, scenes 1..N via gpt-image-1 image_edit).
+- **Stand-up mode** (2026-06): when topic="standup", `/scripts/generate` routes to `generate_standup_script` — a SINGLE comedian on one stage delivering the whole joke across 2-3 beats (same character/stage, only expression changes), punchline SFX on last beat. Comedian can be picked from the user's character library (Studio Joke tab `standup-comedian-select`) or AI-invented. Voice uses the default/produce-panel voice (or the library char's voice if matched). Tested via curl (AI + library comedian) + UI smoke.
+
 ## Backlog
 - P1: Sound-effect audio layering in render (SFX currently selectable/metadata only, not mixed into MP4).
 - P1: Character-consistency via image reference (currently textual description only).

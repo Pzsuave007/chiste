@@ -13,6 +13,37 @@ from PIL import Image, ImageDraw, ImageFont
 logger = logging.getLogger(__name__)
 
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def concat_audio_bytes(clips, gap=0.15):
+    """Concatenate a list of audio byte-clips (mp3) into one, with a short gap between them."""
+    clips = [c for c in clips if c]
+    if not clips:
+        return b""
+    if len(clips) == 1:
+        return clips[0]
+    with tempfile.TemporaryDirectory() as wd:
+        inputs, labels = [], []
+        idx = 0
+        for c in clips:
+            p = os.path.join(wd, f"c{idx}.mp3")
+            with open(p, "wb") as fh:
+                fh.write(c)
+            inputs += ["-i", p]
+            labels.append(f"[{idx}:a]")
+            idx += 1
+            if gap and c is not clips[-1]:
+                inputs += ["-f", "lavfi", "-t", f"{gap}", "-i", "anullsrc=r=44100:cl=stereo"]
+                labels.append(f"[{idx}:a]")
+                idx += 1
+        filt = "".join(labels) + f"concat=n={len(labels)}:v=0:a=1[a]"
+        out = os.path.join(wd, "out.mp3")
+        cmd = [FFMPEG, "-y", *inputs, "-filter_complex", filt, "-map", "[a]", out]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.exists(out):
+            raise RuntimeError(f"concat_audio failed: {r.stderr[-300:]}")
+        with open(out, "rb") as fh:
+            return fh.read()
 FONT_PATH = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
 W, H, FPS = 1080, 1920, 30
 BASE_W, BASE_H = 1620, 2880  # oversized base gives zoompan headroom
