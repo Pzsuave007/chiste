@@ -11,4 +11,3 @@ Pillow
 imageio-ffmpeg
 litellm
 elevenlabs
-emergentintegrations
