@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -201,6 +201,7 @@ class ScriptRequest(BaseModel):
     topic: str = ""
     characters: List[Dict[str, Any]] = []
     comedian: Optional[Dict[str, Any]] = None
+    protagonist: Optional[Dict[str, Any]] = None
 
 class Character(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -220,6 +221,7 @@ class CharacterCreate(BaseModel):
     voice_id: Optional[str] = None
     voice_name: Optional[str] = None
     generate_image: bool = False
+    reference_image_asset_id: Optional[str] = None
 
 class Scene(BaseModel):
     index: int
@@ -363,8 +365,17 @@ async def generate_script(req: ScriptRequest):
         return await generate_standup_script(req)
     lang = "Spanish" if req.language == "es" else "English"
     n_scenes = max(2, min(6, round(req.duration / 8)))
+    proto = req.protagonist or {}
+    pname = (proto.get("name") or "").strip()
+    pdesc = (proto.get("description") or proto.get("visual_dna") or "").strip()
     char_hint = ""
-    if req.characters:
+    if pname:
+        char_hint = (
+            f"The MAIN CHARACTER (protagonist) is {pname}: {pdesc}. "
+            f"{pname} must appear in EVERY scene as the one telling or acting out the joke, and you MUST use "
+            f'the exact name "{pname}" as character_name in every scene. Add extra minor characters only if strictly needed. '
+        )
+    elif req.characters:
         names = ", ".join([c.get("name", "") for c in req.characters])
         char_hint = f"Use these existing characters when possible: {names}. "
     system = (
@@ -437,11 +448,57 @@ async def list_characters():
     docs = await db.characters.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
     return docs
 
+# ---------------- App settings (channel default character) ----------------
+class SettingsUpdate(BaseModel):
+    default_character_id: Optional[str] = None
+
+@api_router.get("/settings")
+async def get_settings():
+    doc = await db.settings.find_one({"key": "app"}, {"_id": 0}) or {}
+    return {"default_character_id": doc.get("default_character_id")}
+
+@api_router.put("/settings")
+async def update_settings(req: SettingsUpdate):
+    await db.settings.update_one(
+        {"key": "app"},
+        {"$set": {"default_character_id": req.default_character_id}},
+        upsert=True,
+    )
+    return {"default_character_id": req.default_character_id}
+
+@api_router.post("/characters/cartoonize")
+async def cartoonize_photo(file: UploadFile = File(...), name: str = Form("")):
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "Empty file")
+    try:
+        import io as _io
+        from PIL import Image
+        im = Image.open(_io.BytesIO(raw)).convert("RGB")
+        buf = _io.BytesIO(); im.save(buf, format="PNG"); png = buf.getvalue()
+        prefix = STYLE_PREFIXES["comic"]
+        who = f" named {name.strip()}" if name.strip() else ""
+        prompt = (
+            f"{prefix} Turn the real person in this photo into a full-body cartoon character reference{who}, "
+            "in this exact comic/vector cartoon style. Keep their recognizable features: face shape, hairstyle and "
+            "hair color, skin tone, facial hair, glasses, and general outfit style. Neutral friendly pose, "
+            "centered on a plain light studio background. Full body visible."
+        )
+        img = await edit_image_bytes(png, prompt)
+        asset_id = await save_asset("character_image", "image/png", img, None)
+        await log_cost(None, "image", 1, COST["image"], "cartoonize")
+        return {"asset_id": asset_id, "url": f"/api/assets/{asset_id}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await log_failure("openai", "/characters/cartoonize", e)
+        raise HTTPException(502, "Could not cartoonize this photo. Try another clear, front-facing photo.")
+
 @api_router.post("/characters")
 async def create_character(req: CharacterCreate):
     char = Character(**req.model_dump(exclude={"generate_image"}))
     char.visual_dna = await make_visual_dna(req.name, req.description)
-    if req.generate_image:
+    if req.generate_image and not req.reference_image_asset_id:
         try:
             char.reference_image_asset_id = await gen_character_image(
                 char.visual_dna or req.description, req.name, req.color)

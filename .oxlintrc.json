@@ -4,5 +4,31 @@
     "**/dist/**",
     "**/node_modules/**",
     "frontend/build/**"
+  ],
+  "env": {
+    "browser": true,
+    "worker": true,
+    "serviceworker": true,
+    "es2021": true,
+    "node": true
+  },
+  "globals": {
+    "WorkerGlobalScope": "readonly",
+    "__REACT_DEVTOOLS_GLOBAL_HOOK__": "readonly",
+    "globalThis": "readonly"
+  },
+  "overrides": [
+    {
+      "files": ["**/build/**", "**/*.min.js", "**/static/js/**"],
+      "rules": {
+        "no-undef": "off",
+        "no-unused-vars": "off",
+        "no-empty": "off",
+        "no-cond-assign": "off",
+        "no-fallthrough": "off",
+        "no-control-regex": "off",
+        "no-misleading-character-class": "off"
+      }
+    }
   ]
 }

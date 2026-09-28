@@ -47,7 +47,7 @@ export default function Studio() {
   const [musicLibrary, setMusicLibrary] = useState([]);
   const [loadingPreset, setLoadingPreset] = useState(false);
   const [jokeForm, setJokeForm] = useState({ topic: "standup", duration: 30, custom_joke: "" });
-  const [standupCharId, setStandupCharId] = useState("__ai__");
+  const [channelCharId, setChannelCharId] = useState("__ai__");
   const [selected, setSelected] = useState(0);
 
   const [busy, setBusy] = useState({ joke: false, script: false, all: false, render: false });
@@ -76,6 +76,9 @@ export default function Studio() {
     api.get("/characters").then((r) => setCharacters(r.data)).catch(() => {});
     api.get("/voices").then((r) => setVoices(r.data)).catch(() => {});
     api.get("/music/library").then((r) => setMusicLibrary(r.data)).catch(() => {});
+    api.get("/settings").then((r) => {
+      if (r.data?.default_character_id) setChannelCharId(r.data.default_character_id);
+    }).catch(() => {});
     return () => clearInterval(pollRef.current);
   }, [load]);
 
@@ -164,14 +167,16 @@ export default function Studio() {
     setBusy((b) => ({ ...b, script: true }));
     try {
       await patchProject({ joke });
-      const comedianChar = characters.find((c) => c.id === standupCharId);
+      const chosen = characters.find((c) => c.id === channelCharId);
+      const charPayload = chosen
+        ? { name: chosen.name, description: chosen.visual_dna || chosen.description }
+        : null;
       const { data } = await api.post("/scripts/generate", {
         joke, language: project.language, duration: jokeForm.duration,
         topic: jokeForm.topic,
         characters: characters.map((c) => ({ name: c.name, description: c.description })),
-        comedian: jokeForm.topic === "standup" && comedianChar
-          ? { name: comedianChar.name, description: comedianChar.visual_dna || comedianChar.description }
-          : null,
+        comedian: jokeForm.topic === "standup" ? charPayload : null,
+        protagonist: jokeForm.topic !== "standup" ? charPayload : null,
       });
       // attach character voices by name match
       const enriched = data.scenes.map((s, i) => {
@@ -384,19 +389,19 @@ export default function Studio() {
                   </Select>
                 </div>
               </div>
-              {jokeForm.topic === "standup" && (
-                <div>
-                  <Label>{t("standup_comedian")}</Label>
-                  <Select value={standupCharId} onValueChange={setStandupCharId}>
-                    <SelectTrigger data-testid="standup-comedian-select" className="mt-1.5 bg-[#0B0F17] border-white/10"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__ai__">{t("standup_ai")}</SelectItem>
-                      {characters.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <p className="mt-1.5 text-[11px] text-muted-foreground">{t("standup_hint")}</p>
-                </div>
-              )}
+              <div>
+                <Label>{jokeForm.topic === "standup" ? t("standup_comedian") : t("main_character")}</Label>
+                <Select value={channelCharId} onValueChange={setChannelCharId}>
+                  <SelectTrigger data-testid="channel-character-select" className="mt-1.5 bg-[#0B0F17] border-white/10"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__ai__">{t("standup_ai")}</SelectItem>
+                    {characters.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  {jokeForm.topic === "standup" ? t("standup_hint") : t("protagonist_hint")}
+                </p>
+              </div>
               <Button data-testid="joke-generator-trigger" onClick={generateJoke} disabled={busy.joke} className="gap-2 font-semibold">
                 {busy.joke ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
                 {busy.joke ? t("generating") : t("joke_generate")}

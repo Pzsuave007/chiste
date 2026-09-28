@@ -47,6 +47,12 @@ Joke gen, script/scene breakdown, character library, scene image gen, voices, st
 - `deploy/` folder for GoDaddy VPS + AlmaLinux + Apache/cPanel + Mongo (per user's elfaro guide): `bootstrap.sh`, `install_server.sh`, `harden.sh` (swap+mongo+systemd), `repair.sh`, `htaccess`, `requirements.prod.txt`, `backend.env.production.example`, `DEPLOY_CHISTE.md`.
 - Config: repo `Pzsuave007/chiste`, domain `hazlocon.com`, cPanel user `hazlocon`, backend port `8013`, service `chiste-backend`, DB `chiste_prod`. Keys (Emergent + ElevenLabs) injected from base64 by scripts.
 
+## Channel character + Photo→Cartoon (2026-06)
+- **Channel default character**: `settings` collection + `GET/PUT /api/settings` (`default_character_id`). Star toggle on each card in Characters page (`channel-character-toggle`). Studio pre-selects it in every new project.
+- **Unified main-character selector** in Studio Joke tab (`channel-character-select`, shows for all topics): passed as `comedian` in Stand-up and as `protagonist` in story mode. Story `generate_script` now forces the protagonist into every scene (`character_name` = their name) → same look across all videos via the character's saved reference image (anchor).
+- **Photo → Cartoon**: `POST /api/characters/cartoonize` (multipart photo, normalized to PNG via Pillow, `gpt-image-1` image_edit with the app comic style) → returns a cartoon reference asset. Characters dialog has upload + preview + regenerate (`character-photo-upload`, `character-photo-preview`, `character-photo-regen`); `CharacterCreate.reference_image_asset_id` lets create use the cartoon directly. Tested via curl (great full-body result) + settings/protagonist curls + UI smoke.
+- Deploy build helper: `frontend/build-prod.sh` (builds with relative /api + injects `/* eslint-disable */` into minified bundle so the committed build passes lint).
+
 ## Backlog
 - P1: Sound-effect audio layering in render (SFX currently selectable/metadata only, not mixed into MP4).
 - P1: Character-consistency via image reference (currently textual description only).
