@@ -179,7 +179,7 @@ export default function Characters() {
                 )}
                 {photoAsset && !cartoonizing && (
                   <div className="mt-2 flex items-center gap-3">
-                    <img src={assetUrl(photoAsset)} alt="preview" data-testid="character-photo-preview" className="w-24 h-24 rounded-lg object-cover border border-primary/40" />
+                    <img src={assetUrl(photoAsset)} alt="preview" data-testid="character-photo-preview" className="w-24 h-32 rounded-lg object-cover object-top border border-primary/40" />
                     <p className="text-[11px] text-muted-foreground">{t("char_photo_ok")}</p>
                   </div>
                 )}
@@ -212,9 +212,9 @@ export default function Characters() {
               className="rounded-2xl border border-white/10 bg-[#1A243B] overflow-hidden"
               style={{ borderTopColor: c.color, borderTopWidth: 3 }}
             >
-              <div className="aspect-square bg-gradient-to-br from-[#131B2E] to-[#0B0F17] relative">
+              <div className="aspect-[3/4] bg-gradient-to-br from-[#131B2E] to-[#0B0F17] relative">
                 {c.reference_image_asset_id ? (
-                  <img src={assetUrl(c.reference_image_asset_id)} alt={c.name} className="w-full h-full object-cover" />
+                  <img src={assetUrl(c.reference_image_asset_id)} alt={c.name} className="w-full h-full object-cover object-top" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-white/20"><ImageOff className="w-8 h-8" /></div>
                 )}
