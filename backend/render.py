@@ -44,9 +44,36 @@ def concat_audio_bytes(clips, gap=0.15):
             raise RuntimeError(f"concat_audio failed: {r.stderr[-300:]}")
         with open(out, "rb") as fh:
             return fh.read()
-FONT_PATH = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+def _find_font():
+    """Locate a bold sans TTF across distros (Debian/Ubuntu + AlmaLinux/RHEL). Env override wins."""
+    env = os.environ.get("SUBTITLE_FONT_PATH")
+    candidates = [env] if env else []
+    candidates += [
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",  # Debian/Ubuntu
+        "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",       # AlmaLinux/RHEL
+        "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",                    # AlmaLinux fallback
+        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",         # AlmaLinux (newer)
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+
+FONT_PATH = _find_font()
 W, H, FPS = 1080, 1920, 30
 BASE_W, BASE_H = 1620, 2880  # oversized base gives zoompan headroom
+
+
+def _load_font(size):
+    if FONT_PATH:
+        try:
+            return ImageFont.truetype(FONT_PATH, size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
 
 _ENC_CACHE = {}
 
@@ -75,7 +102,7 @@ def _subtitle_png(text, path):
         img.save(path)
         return
     draw = ImageDraw.Draw(img)
-    font = ImageFont.truetype(FONT_PATH, 62)
+    font = _load_font(62)
     words = text.strip().split()
     lines, cur = [], ""
     maxw = W - 200

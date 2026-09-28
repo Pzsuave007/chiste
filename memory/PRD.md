@@ -40,6 +40,13 @@ Joke gen, script/scene breakdown, character library, scene image gen, voices, st
 - Character consistency via anchor image (scene 0 text-to-image, scenes 1..N via gpt-image-1 image_edit).
 - **Stand-up mode** (2026-06): when topic="standup", `/scripts/generate` routes to `generate_standup_script` — a SINGLE comedian on one stage delivering the whole joke across 2-3 beats (same character/stage, only expression changes), punchline SFX on last beat. Comedian can be picked from the user's character library (Studio Joke tab `standup-comedian-select`) or AI-invented. Voice uses the default/produce-panel voice (or the library char's voice if matched). Tested via curl (AI + library comedian) + UI smoke.
 
+## Deployment package (2026-06) — VPS self-host
+- Assets migrated from MongoDB base64 → **local disk** `MEDIA_DIR` (`save_asset`/`get_asset`/`_asset_bytes` in server.py); legacy base64 docs still served (backward compat). Dev default `backend/media_store/`.
+- `render.py` font path made cross-distro robust (`_find_font`/`_load_font`: Debian + AlmaLinux/RHEL Liberation/DejaVu, `SUBTITLE_FONT_PATH` override, PIL default fallback).
+- Frontend build committed (`frontend/.gitignore` un-ignores `/build`); `.gitignore` ignores `backend/media_store/`.
+- `deploy/` folder for GoDaddy VPS + AlmaLinux + Apache/cPanel + Mongo (per user's elfaro guide): `bootstrap.sh`, `install_server.sh`, `harden.sh` (swap+mongo+systemd), `repair.sh`, `htaccess`, `requirements.prod.txt`, `backend.env.production.example`, `DEPLOY_CHISTE.md`.
+- Config: repo `Pzsuave007/chiste`, domain `hazlocon.com`, cPanel user `hazlocon`, backend port `8013`, service `chiste-backend`, DB `chiste_prod`. Keys (Emergent + ElevenLabs) injected from base64 by scripts.
+
 ## Backlog
 - P1: Sound-effect audio layering in render (SFX currently selectable/metadata only, not mixed into MP4).
 - P1: Character-consistency via image reference (currently textual description only).

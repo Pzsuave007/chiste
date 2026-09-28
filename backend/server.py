@@ -27,6 +27,15 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
+# Local disk media storage (images/audio/video) — avoids bloating MongoDB on low-RAM servers
+MEDIA_DIR = os.environ.get('MEDIA_DIR', str(ROOT_DIR / 'media_store'))
+Path(MEDIA_DIR).mkdir(parents=True, exist_ok=True)
+_EXT = {
+    "image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg", "image/webp": "webp",
+    "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/wav": "wav", "audio/x-wav": "wav",
+    "audio/ogg": "ogg", "video/mp4": "mp4",
+}
+
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 ELEVENLABS_API_KEY = os.environ.get('ELEVENLABS_API_KEY')
 CREATOMATE_API_KEY = os.environ.get('CREATOMATE_API_KEY')
@@ -78,14 +87,19 @@ async def log_failure(service: str, endpoint: str, error: str, project_id: Optio
     await db.api_failures.insert_one(doc)
     logger.error(f"[{service}] {endpoint} failed: {error}")
 
-# ---------------- Asset storage (images/audio) ----------------
+# ---------------- Asset storage (images/audio on local disk) ----------------
 async def save_asset(kind: str, content_type: str, data_bytes: bytes, project_id: Optional[str] = None) -> str:
     asset_id = str(uuid.uuid4())
+    ext = _EXT.get(content_type, "bin")
+    rel = f"{kind}/{asset_id}.{ext}"
+    fpath = Path(MEDIA_DIR) / rel
+    fpath.parent.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(fpath.write_bytes, data_bytes)
     await db.assets.insert_one({
         "id": asset_id,
         "kind": kind,
         "content_type": content_type,
-        "data": base64.b64encode(data_bytes).decode(),
+        "path": rel,
         "project_id": project_id,
         "created_at": now_iso(),
     })
@@ -96,7 +110,14 @@ async def get_asset(asset_id: str):
     doc = await db.assets.find_one({"id": asset_id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Asset not found")
-    return Response(content=base64.b64decode(doc["data"]), media_type=doc["content_type"])
+    # backward compat: legacy assets stored base64 inline in Mongo
+    if doc.get("data"):
+        return Response(content=base64.b64decode(doc["data"]), media_type=doc["content_type"])
+    fpath = Path(MEDIA_DIR) / doc["path"]
+    if not fpath.exists():
+        raise HTTPException(404, "Asset file missing")
+    data = await asyncio.to_thread(fpath.read_bytes)
+    return Response(content=data, media_type=doc["content_type"])
 
 # ---------------- LLM helpers ----------------
 def strip_json(text: str) -> str:
@@ -791,7 +812,12 @@ async def _asset_bytes(asset_id: Optional[str]) -> Optional[bytes]:
     if not asset_id:
         return None
     doc = await db.assets.find_one({"id": asset_id}, {"_id": 0})
-    return base64.b64decode(doc["data"]) if doc else None
+    if not doc:
+        return None
+    if doc.get("data"):
+        return base64.b64decode(doc["data"])
+    fpath = Path(MEDIA_DIR) / doc["path"]
+    return await asyncio.to_thread(fpath.read_bytes) if fpath.exists() else None
 
 async def _ensure_scene_audio(project: dict) -> dict:
     """Guarantee every dialogue scene has a synchronized voice before rendering."""

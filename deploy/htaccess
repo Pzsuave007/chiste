@@ -1,0 +1,14 @@
+# Chiste Studio AI — Apache (cPanel) front controller
+# Force HTTPS
+RewriteEngine On
+RewriteCond %{HTTPS} !=on
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# Proxy API calls to the FastAPI backend (port 8013)
+RewriteCond %{REQUEST_URI} ^/api
+RewriteRule ^(.*)$ http://127.0.0.1:8013/$1 [P,L]
+
+# SPA fallback: everything else -> React index.html
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.html [L]

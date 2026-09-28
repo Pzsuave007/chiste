@@ -9,7 +9,7 @@
 /coverage
 
 # production
-/build
+# /build is committed for VPS deploy (see deploy/NEXT_PROJECT_GUIDE)
 
 # misc
 .DS_Store

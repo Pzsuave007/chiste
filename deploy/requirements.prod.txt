@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+python-dotenv
+pymongo
+motor
+pydantic
+python-multipart
+requests
+tzdata
+Pillow
+imageio-ffmpeg
+litellm
+elevenlabs
+emergentintegrations
