@@ -53,6 +53,11 @@ Joke gen, script/scene breakdown, character library, scene image gen, voices, st
 - **Photo → Cartoon**: `POST /api/characters/cartoonize` (multipart photo, normalized to PNG via Pillow, `gpt-image-1` image_edit with the app comic style) → returns a cartoon reference asset. Characters dialog has upload + preview + regenerate (`character-photo-upload`, `character-photo-preview`, `character-photo-regen`); `CharacterCreate.reference_image_asset_id` lets create use the cartoon directly. Tested via curl (great full-body result) + settings/protagonist curls + UI smoke.
 - Deploy build helper: `frontend/build-prod.sh` (builds with relative /api + injects `/* eslint-disable */` into minified bundle so the committed build passes lint).
 
+## Character editing (2026-06)
+- Added **Edit character** on the Characters page (`character-edit-button` → `Editar personaje` dialog): change name, description, color and **assigned voice** (`edit-character-voice-select`). Save via `PUT /api/characters/{id}`.
+- Fixed `update_character` to only `$set` provided (non-None) fields so editing **never wipes the reference image** or other data. Tested via curl (voice changed, image preserved) + UI smoke.
+- Note: **Lip-sync animation (fal.ai)** was explored but **reverted** at user's request — fal queue was slow/stuck and cost ~$0.13/sec. App stays on free static-image render (FFmpeg). `fal_media.py` removed; render path back to static.
+
 ## Backlog
 - P1: Sound-effect audio layering in render (SFX currently selectable/metadata only, not mixed into MP4).
 - P1: Character-consistency via image reference (currently textual description only).

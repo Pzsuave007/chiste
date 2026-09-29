@@ -150,7 +150,61 @@ def _zoompan(motion, frames):
     return f"zoompan=z='1.06':{center}{common}"
 
 
+def _render_clip_segment(scene, workdir, idx):
+    """Build a segment from a pre-rendered lip-sync clip (video + baked voice).
+    Scales/crops to 9:16, overlays the subtitle, and appends the punchline SFX if present."""
+    clip_path = os.path.join(workdir, f"clip_{idx}.mp4")
+    with open(clip_path, "wb") as fh:
+        fh.write(scene["clip_bytes"])
+    vdur = _duration(clip_path) or 3.0
+
+    sfx_path = None
+    if scene.get("sfx_bytes"):
+        sfx_path = os.path.join(workdir, f"csfx_{idx}.mp3")
+        with open(sfx_path, "wb") as fh:
+            fh.write(scene["sfx_bytes"])
+    sdur = _duration(sfx_path) if sfx_path else 0.0
+    gap = 0.25
+    dur = vdur + gap + sdur + 0.15 if sfx_path else vdur
+
+    sub_path = os.path.join(workdir, f"sub_{idx}.png")
+    _subtitle_png(scene.get("dialogue", ""), sub_path)
+
+    seg_path = os.path.join(workdir, f"seg_{idx}.mp4")
+    base = f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1"
+    if sfx_path:
+        base += f",tpad=stop_mode=clone:stop_duration={gap + sdur + 0.15}"
+    fc = f"{base}[bg];[bg][1:v]overlay=0:0,format=yuv420p[v]"
+
+    cmd = [FFMPEG, "-y", "-i", clip_path, "-i", sub_path]
+    if sfx_path:
+        cmd += ["-i", sfx_path]
+        delay_ms = int((vdur + gap) * 1000)
+        vol = scene.get("sfx_volume", 0.95)
+        fc += (
+            f";[0:a]aformat=sample_rates=44100:channel_layouts=stereo[vox];"
+            f"[2:a]adelay={delay_ms}|{delay_ms},volume={vol},"
+            "aformat=sample_rates=44100:channel_layouts=stereo[sfx];"
+            "[vox][sfx]amix=inputs=2:duration=longest:normalize=0,apad[aout]"
+        )
+    else:
+        fc += ";[0:a]aformat=sample_rates=44100:channel_layouts=stereo,apad[aout]"
+
+    cmd += [
+        "-filter_complex", fc, "-map", "[v]", "-map", "[aout]",
+        "-c:v", _video_encoder(), "-pix_fmt", "yuv420p", "-r", f"{FPS}",
+        "-t", f"{dur}", "-c:a", "aac", "-ar", "44100", "-b:a", "128k",
+        seg_path,
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0 or not os.path.exists(seg_path):
+        raise RuntimeError(f"clip segment {idx} failed: {res.stderr[-600:]}")
+    return seg_path
+
+
 def _render_segment(scene, workdir, idx):
+    if scene.get("clip_bytes"):
+        return _render_clip_segment(scene, workdir, idx)
     img_path = os.path.join(workdir, f"img_{idx}.png")
     with open(img_path, "wb") as fh:
         fh.write(scene["image_bytes"])

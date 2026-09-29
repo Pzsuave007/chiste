@@ -43,6 +43,7 @@ grep -q '^MONGO_URL='    "${ENVF}" || echo "MONGO_URL=mongodb://localhost:27017"
 grep -q '^DB_NAME='      "${ENVF}" || echo "DB_NAME=${DB_NAME}" >> "${ENVF}"
 grep -q '^PORT='         "${ENVF}" || echo "PORT=${PORT}" >> "${ENVF}"
 grep -q '^MEDIA_DIR='    "${ENVF}" || echo "MEDIA_DIR=${MEDIA_DIR}" >> "${ENVF}"
+grep -q '^PUBLIC_BASE_URL=' "${ENVF}" || echo "PUBLIC_BASE_URL=https://${DOMAIN}" >> "${ENVF}"
 grep -q '^CORS_ORIGINS=' "${ENVF}" || echo "CORS_ORIGINS=https://${DOMAIN},https://www.${DOMAIN}" >> "${ENVF}"
 
 echo "==> [5/8] Verify build exists"

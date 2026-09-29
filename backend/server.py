@@ -30,6 +30,11 @@ db = client[os.environ['DB_NAME']]
 # Local disk media storage (images/audio/video) — avoids bloating MongoDB on low-RAM servers
 MEDIA_DIR = os.environ.get('MEDIA_DIR', str(ROOT_DIR / 'media_store'))
 Path(MEDIA_DIR).mkdir(parents=True, exist_ok=True)
+# Public base URL so external services (fal.ai) can fetch our assets by absolute HTTPS URL
+PUBLIC_BASE_URL = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/')
+
+def _public_asset_url(asset_id: str) -> str:
+    return f"{PUBLIC_BASE_URL}/api/assets/{asset_id}"
 _EXT = {
     "image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg", "image/webp": "webp",
     "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/wav": "wav", "audio/x-wav": "wav",
@@ -236,6 +241,8 @@ class Scene(BaseModel):
     audio_asset_id: Optional[str] = None
     voice_id: Optional[str] = None
     approved: bool = False
+    clip_asset_id: Optional[str] = None
+    clip_src: Optional[str] = None
 
 class ProjectCreate(BaseModel):
     title: str
@@ -248,6 +255,7 @@ class ProjectCreate(BaseModel):
     laugh_intensity: str = "medium"
     joke: str = ""
     scenes: List[Scene] = []
+    animate: bool = False
 
 class ProjectUpdate(BaseModel):
     title: Optional[str] = None
@@ -257,6 +265,7 @@ class ProjectUpdate(BaseModel):
     default_voice_id: Optional[str] = None
     music_volume: Optional[int] = None
     laugh_intensity: Optional[str] = None
+    animate: Optional[bool] = None
 
 class TTSRequest(BaseModel):
     text: str
@@ -527,8 +536,10 @@ async def regenerate_character_image(char_id: str):
 
 @api_router.put("/characters/{char_id}")
 async def update_character(char_id: str, req: CharacterCreate):
-    updates = req.model_dump(exclude={"generate_image"})
-    updates["visual_dna"] = await make_visual_dna(req.name, req.description)
+    # Only update provided fields; never wipe the reference image or other data on edit.
+    updates = {k: v for k, v in req.model_dump(exclude={"generate_image"}).items() if v is not None}
+    if req.name:
+        updates["visual_dna"] = await make_visual_dna(req.name, req.description)
     r = await db.characters.update_one({"id": char_id}, {"$set": updates})
     if r.matched_count == 0:
         raise HTTPException(404, "Character not found")
@@ -811,6 +822,7 @@ async def create_project(req: ProjectCreate):
         "music_asset_id": None,
         "music_volume": req.music_volume,
         "laugh_intensity": req.laugh_intensity,
+        "animate": req.animate,
         "char_refs": {},
         "joke": req.joke,
         "scenes": [s.model_dump() for s in req.scenes],

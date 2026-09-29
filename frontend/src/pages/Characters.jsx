@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
-import { Plus, Users, Trash2, RefreshCw, Mic, Loader2, ImageOff, Fingerprint, Star, Upload } from "lucide-react";
+import { Plus, Users, Trash2, RefreshCw, Mic, Loader2, ImageOff, Fingerprint, Star, Upload, Pencil } from "lucide-react";
 import { api, assetUrl } from "@/lib/api";
 import { useLang } from "@/i18n";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,10 @@ export default function Characters() {
   const [photoAsset, setPhotoAsset] = useState(null);
   const [photoFile, setPhotoFile] = useState(null);
   const [cartoonizing, setCartoonizing] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editForm, setEditForm] = useState({ name: "", description: "", color: COLORS[0], voice_id: "", voice_name: "" });
   const [form, setForm] = useState({ name: "", description: "", color: COLORS[0], voice_id: "", voice_name: "", generate_image: true });
 
   const load = useCallback(() => {
@@ -68,6 +72,32 @@ export default function Characters() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const openEdit = (c) => {
+    setEditId(c.id);
+    setEditForm({ name: c.name || "", description: c.description || "", color: c.color || COLORS[0], voice_id: c.voice_id || "", voice_name: c.voice_name || "" });
+    setEditOpen(true);
+  };
+
+  const saveEdit = async () => {
+    if (!editForm.name.trim()) return;
+    setSavingEdit(true);
+    try {
+      await api.put(`/characters/${editId}`, editForm);
+      toast.success(t("t_char_updated"));
+      setEditOpen(false);
+      load();
+    } catch {
+      toast.error(t("t_error"));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const pickEditVoice = (vid) => {
+    const v = voices.find((x) => x.voice_id === vid);
+    setEditForm({ ...editForm, voice_id: vid, voice_name: v?.name || "" });
   };
 
   const cartoonize = async (file) => {
@@ -198,6 +228,48 @@ export default function Characters() {
         </Dialog>
       </div>
 
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="bg-[#131B2E] border-white/10 max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle className="font-display text-2xl">{t("char_edit_title")}</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>{t("char_name")}</Label>
+              <Input data-testid="edit-character-name-input" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} className="mt-1.5 bg-[#0B0F17] border-white/10" />
+            </div>
+            <div>
+              <Label>{t("char_desc")}</Label>
+              <Textarea data-testid="edit-character-description-input" value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} rows={3} className="mt-1.5 bg-[#0B0F17] border-white/10" />
+            </div>
+            <div>
+              <Label>{t("char_color")}</Label>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {COLORS.map((c) => (
+                  <button
+                    key={c}
+                    data-testid={`edit-character-color-${c}`}
+                    onClick={() => setEditForm({ ...editForm, color: c })}
+                    className={`w-8 h-8 rounded-full border-2 transition-transform hover:scale-110 ${editForm.color === c ? "border-white scale-110" : "border-transparent"}`}
+                    style={{ backgroundColor: c }}
+                  />
+                ))}
+              </div>
+            </div>
+            <div>
+              <Label>{t("char_voice")}</Label>
+              <Select value={editForm.voice_id} onValueChange={pickEditVoice}>
+                <SelectTrigger data-testid="edit-character-voice-select" className="mt-1.5 bg-[#0B0F17] border-white/10"><SelectValue placeholder={t("no_voice")} /></SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {voices.map((v) => <SelectItem key={v.voice_id} value={v.voice_id}>{v.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button data-testid="save-edit-character-button" onClick={saveEdit} disabled={savingEdit || !editForm.name.trim()} className="w-full font-semibold">
+              {savingEdit ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />{t("generating")}</> : t("char_save")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {chars.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-white/15 p-14 text-center text-muted-foreground">{t("char_empty")}</div>
       ) : (
@@ -254,8 +326,11 @@ export default function Characters() {
                   </details>
                 )}
                 <div className="flex gap-2 mt-3">
-                  <Button data-testid="character-regen-image-button" size="sm" variant="outline" className="flex-1 gap-1 h-8 text-xs" onClick={() => regen(c.id)} disabled={regenId === c.id}>
-                    {regenId === c.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />} {t("char_regen")}
+                  <Button data-testid="character-edit-button" size="sm" variant="outline" className="flex-1 gap-1 h-8 text-xs" onClick={() => openEdit(c)}>
+                    <Pencil className="w-3 h-3" /> {t("char_edit")}
+                  </Button>
+                  <Button data-testid="character-regen-image-button" size="sm" variant="outline" className="gap-1 h-8 text-xs px-2" onClick={() => regen(c.id)} disabled={regenId === c.id} title={t("char_regen")}>
+                    {regenId === c.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                   </Button>
                   <Button data-testid="character-delete-button" size="sm" variant="ghost" className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400" onClick={() => remove(c.id)}>
                     <Trash2 className="w-3.5 h-3.5" />
