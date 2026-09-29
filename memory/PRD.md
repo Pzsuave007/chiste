@@ -58,6 +58,12 @@ Joke gen, script/scene breakdown, character library, scene image gen, voices, st
 - Fixed `update_character` to only `$set` provided (non-None) fields so editing **never wipes the reference image** or other data. Tested via curl (voice changed, image preserved) + UI smoke.
 - Note: **Lip-sync animation (fal.ai)** was explored but **reverted** at user's request — fal queue was slow/stuck and cost ~$0.13/sec. App stays on free static-image render (FFmpeg). `fal_media.py` removed; render path back to static.
 
+## Story mode (2026-06)
+- Added **Historia** mode alongside **Chiste** (toggle in Studio Joke tab: `mode-joke-btn` / `mode-story-btn`). Project stores `mode` + `story_type`.
+- `POST /api/stories/generate` (StoryRequest): story types anecdote/curiosity/fable/horror/motivational/custom + optional free theme + custom text; reuses gpt-5.4 text.
+- `ScriptRequest.mode`: story mode uses a narration-oriented system prompt, natural ending (NO punchline) and **all sfx="none"** (background music still applies). Reuses the whole storyboard→images→voices→render pipeline + channel character as protagonist.
+- Frontend: `story-type-select`, `story-theme-input`, adaptive labels/button. Tested via curl (story generated, storyboard sfx all none) + UI smoke.
+
 ## Backlog
 - P1: Sound-effect audio layering in render (SFX currently selectable/metadata only, not mixed into MP4).
 - P1: Character-consistency via image reference (currently textual description only).

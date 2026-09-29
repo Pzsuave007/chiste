@@ -7,7 +7,7 @@ import {
   Check, Film, Download, PlayCircle, Plus, Trash2, ClipboardList, Rocket, CheckCircle2, Circle, Volume2, Music,
 } from "lucide-react";
 import { api, assetUrl } from "@/lib/api";
-import { useLang, TOPICS, DURATIONS, CAMERA_MOTIONS, SFX } from "@/i18n";
+import { useLang, TOPICS, DURATIONS, CAMERA_MOTIONS, SFX, STORY_TYPES } from "@/i18n";
 import { StatusPill } from "@/components/Header";
 import { VideoPreview } from "@/components/VideoPreview";
 import { Button } from "@/components/ui/button";
@@ -46,7 +46,7 @@ export default function Studio() {
   const [musicPreset, setMusicPreset] = useState("");
   const [musicLibrary, setMusicLibrary] = useState([]);
   const [loadingPreset, setLoadingPreset] = useState(false);
-  const [jokeForm, setJokeForm] = useState({ topic: "standup", duration: 30, custom_joke: "" });
+  const [jokeForm, setJokeForm] = useState({ mode: "joke", topic: "standup", story_type: "anecdote", story_topic: "", duration: 30, custom_joke: "" });
   const [channelCharId, setChannelCharId] = useState("__ai__");
   const [selected, setSelected] = useState(0);
 
@@ -67,7 +67,7 @@ export default function Studio() {
     setHasMusic(!!data.music_asset_id);
     setMusicAssetId(data.music_asset_id || null);
     setMusicPreset(data.music_preset || "");
-    setJokeForm((f) => ({ ...f, topic: data.topic, duration: data.duration }));
+    setJokeForm((f) => ({ ...f, topic: data.topic, duration: data.duration, mode: data.mode || "joke", story_type: data.story_type || "anecdote" }));
     if (data.scenes?.length) setTab(data.status === "draft" ? "joke" : "script");
   }, [id]);
 
@@ -149,11 +149,23 @@ export default function Studio() {
   const generateJoke = async () => {
     setBusy((b) => ({ ...b, joke: true }));
     try {
-      const { data } = await api.post("/jokes/generate", {
-        topic: jokeForm.topic, language: project.language, duration: jokeForm.duration,
-        custom_joke: jokeForm.custom_joke || null,
-      });
-      setJoke(data.joke);
+      if (jokeForm.mode === "story") {
+        await patchProject({ mode: "story", story_type: jokeForm.story_type });
+        const { data } = await api.post("/stories/generate", {
+          story_type: jokeForm.story_type,
+          topic: jokeForm.story_topic || "",
+          language: project.language, duration: jokeForm.duration,
+          custom_story: jokeForm.custom_joke || null,
+        });
+        setJoke(data.story);
+      } else {
+        await patchProject({ mode: "joke" });
+        const { data } = await api.post("/jokes/generate", {
+          topic: jokeForm.topic, language: project.language, duration: jokeForm.duration,
+          custom_joke: jokeForm.custom_joke || null,
+        });
+        setJoke(data.joke);
+      }
       toast.success(t("t_joke_ok"));
     } catch {
       toast.error(t("t_error"));
@@ -171,12 +183,15 @@ export default function Studio() {
       const charPayload = chosen
         ? { name: chosen.name, description: chosen.visual_dna || chosen.description }
         : null;
+      const isStory = jokeForm.mode === "story";
+      const isStandup = !isStory && jokeForm.topic === "standup";
       const { data } = await api.post("/scripts/generate", {
         joke, language: project.language, duration: jokeForm.duration,
-        topic: jokeForm.topic,
+        topic: isStory ? (jokeForm.story_topic || "story") : jokeForm.topic,
+        mode: jokeForm.mode,
         characters: characters.map((c) => ({ name: c.name, description: c.description })),
-        comedian: jokeForm.topic === "standup" ? charPayload : null,
-        protagonist: jokeForm.topic !== "standup" ? charPayload : null,
+        comedian: isStandup ? charPayload : null,
+        protagonist: !isStandup ? charPayload : null,
       });
       // attach character voices by name match
       const enriched = data.scenes.map((s, i) => {
@@ -371,16 +386,38 @@ export default function Studio() {
           <div className="max-w-3xl mx-auto space-y-6">
             <div className="rounded-2xl border border-white/10 bg-[#131B2E] p-6 sm:p-8 space-y-5">
               <h2 className="font-display text-2xl font-bold text-white flex items-center gap-2">
-                <Sparkles className="w-6 h-6 text-primary" /> {t("joke_generate")}
+                <Sparkles className="w-6 h-6 text-primary" /> {jokeForm.mode === "story" ? t("story_generate") : t("joke_generate")}
               </h2>
+              <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#0B0F17] border border-white/10">
+                <button
+                  data-testid="mode-joke-btn"
+                  onClick={() => setJokeForm({ ...jokeForm, mode: "joke" })}
+                  className={`py-2 rounded-lg text-sm font-semibold transition-colors ${jokeForm.mode !== "story" ? "bg-primary text-white" : "text-muted-foreground hover:text-white"}`}
+                >{t("mode_joke")}</button>
+                <button
+                  data-testid="mode-story-btn"
+                  onClick={() => setJokeForm({ ...jokeForm, mode: "story" })}
+                  className={`py-2 rounded-lg text-sm font-semibold transition-colors ${jokeForm.mode === "story" ? "bg-primary text-white" : "text-muted-foreground hover:text-white"}`}
+                >{t("mode_story")}</button>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label>{t("joke_topic")}</Label>
-                  <Select value={jokeForm.topic} onValueChange={(v) => setJokeForm({ ...jokeForm, topic: v })}>
-                    <SelectTrigger data-testid="joke-topic-select" className="mt-1.5 bg-[#0B0F17] border-white/10"><SelectValue /></SelectTrigger>
-                    <SelectContent>{TOPICS.map((tp) => <SelectItem key={tp.id} value={tp.id}>{tp[lang]}</SelectItem>)}</SelectContent>
-                  </Select>
-                </div>
+                {jokeForm.mode === "story" ? (
+                  <div>
+                    <Label>{t("story_type_label")}</Label>
+                    <Select value={jokeForm.story_type} onValueChange={(v) => setJokeForm({ ...jokeForm, story_type: v })}>
+                      <SelectTrigger data-testid="story-type-select" className="mt-1.5 bg-[#0B0F17] border-white/10"><SelectValue /></SelectTrigger>
+                      <SelectContent>{STORY_TYPES.map((st) => <SelectItem key={st.id} value={st.id}>{st[lang]}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                ) : (
+                  <div>
+                    <Label>{t("joke_topic")}</Label>
+                    <Select value={jokeForm.topic} onValueChange={(v) => setJokeForm({ ...jokeForm, topic: v })}>
+                      <SelectTrigger data-testid="joke-topic-select" className="mt-1.5 bg-[#0B0F17] border-white/10"><SelectValue /></SelectTrigger>
+                      <SelectContent>{TOPICS.map((tp) => <SelectItem key={tp.id} value={tp.id}>{tp[lang]}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                )}
                 <div>
                   <Label>{t("joke_duration")}</Label>
                   <Select value={String(jokeForm.duration)} onValueChange={(v) => setJokeForm({ ...jokeForm, duration: Number(v) })}>
@@ -389,8 +426,20 @@ export default function Studio() {
                   </Select>
                 </div>
               </div>
+              {jokeForm.mode === "story" && (
+                <div>
+                  <Label>{t("story_theme")}</Label>
+                  <Input
+                    data-testid="story-theme-input"
+                    value={jokeForm.story_topic}
+                    onChange={(e) => setJokeForm({ ...jokeForm, story_topic: e.target.value })}
+                    placeholder={t("story_theme_ph")}
+                    className="mt-1.5 bg-[#0B0F17] border-white/10"
+                  />
+                </div>
+              )}
               <div>
-                <Label>{jokeForm.topic === "standup" ? t("standup_comedian") : t("main_character")}</Label>
+                <Label>{!jokeForm.mode || jokeForm.mode === "joke" ? (jokeForm.topic === "standup" ? t("standup_comedian") : t("main_character")) : t("main_character")}</Label>
                 <Select value={channelCharId} onValueChange={setChannelCharId}>
                   <SelectTrigger data-testid="channel-character-select" className="mt-1.5 bg-[#0B0F17] border-white/10"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -399,21 +448,21 @@ export default function Studio() {
                   </SelectContent>
                 </Select>
                 <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  {jokeForm.topic === "standup" ? t("standup_hint") : t("protagonist_hint")}
+                  {jokeForm.mode === "joke" && jokeForm.topic === "standup" ? t("standup_hint") : t("protagonist_hint")}
                 </p>
               </div>
               <Button data-testid="joke-generator-trigger" onClick={generateJoke} disabled={busy.joke} className="gap-2 font-semibold">
                 {busy.joke ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                {busy.joke ? t("generating") : t("joke_generate")}
+                {busy.joke ? t("generating") : (jokeForm.mode === "story" ? t("story_generate") : t("joke_generate"))}
               </Button>
 
               <div className="pt-2">
-                <Label>{t("joke_custom")}</Label>
+                <Label>{jokeForm.mode === "story" ? t("story_custom") : t("joke_custom")}</Label>
                 <Textarea
                   data-testid="custom-joke-textarea"
                   value={jokeForm.custom_joke}
                   onChange={(e) => setJokeForm({ ...jokeForm, custom_joke: e.target.value })}
-                  placeholder={t("joke_custom_ph")} rows={2}
+                  placeholder={jokeForm.mode === "story" ? t("story_custom_ph") : t("joke_custom_ph")} rows={2}
                   className="mt-1.5 bg-[#0B0F17] border-white/10"
                 />
                 {jokeForm.custom_joke.trim() && (

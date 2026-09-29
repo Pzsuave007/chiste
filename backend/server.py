@@ -207,6 +207,7 @@ class ScriptRequest(BaseModel):
     characters: List[Dict[str, Any]] = []
     comedian: Optional[Dict[str, Any]] = None
     protagonist: Optional[Dict[str, Any]] = None
+    mode: str = "joke"
 
 class Character(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -256,6 +257,8 @@ class ProjectCreate(BaseModel):
     joke: str = ""
     scenes: List[Scene] = []
     animate: bool = False
+    mode: str = "joke"
+    story_type: str = "anecdote"
 
 class ProjectUpdate(BaseModel):
     title: Optional[str] = None
@@ -266,6 +269,8 @@ class ProjectUpdate(BaseModel):
     music_volume: Optional[int] = None
     laugh_intensity: Optional[str] = None
     animate: Optional[bool] = None
+    mode: Optional[str] = None
+    story_type: Optional[str] = None
 
 class TTSRequest(BaseModel):
     text: str
@@ -303,6 +308,49 @@ async def generate_joke(req: JokeRequest):
     except Exception as e:
         await log_failure("openai", "/jokes/generate", e)
         raise HTTPException(502, "Joke generation failed. Please retry.")
+
+# ---------------- Story generation (non-joke narrated videos) ----------------
+STORY_KIND = {
+    "anecdote": "a short, funny everyday anecdote",
+    "curiosity": "a fascinating 'did you know?' curiosity or interesting fact explained simply and vividly",
+    "fable": "a short children's fable with lovable characters and a gentle moral at the end",
+    "horror": "a short suspenseful, spooky micro-story with a chilling twist ending (not gory)",
+    "motivational": "a short motivational, reflective story with an uplifting takeaway",
+    "custom": "a short, engaging story",
+}
+
+class StoryRequest(BaseModel):
+    story_type: str = "anecdote"
+    topic: str = ""
+    language: str = "es"
+    duration: int = 30
+    custom_story: Optional[str] = None
+
+@api_router.post("/stories/generate")
+async def generate_story(req: StoryRequest):
+    if req.custom_story and req.custom_story.strip():
+        await log_cost(None, "joke", 1, COST["joke"], "custom-story")
+        return {"story": req.custom_story.strip(), "source": "custom"}
+    lang = "Spanish (Latin American)" if req.language == "es" else "English"
+    kind = STORY_KIND.get(req.story_type, STORY_KIND["anecdote"])
+    theme = f" about the theme: '{req.topic}'" if req.topic.strip() else ""
+    words = max(40, int(req.duration * 2.2))
+    system = (
+        "You are a scriptwriter for short vertical cartoon videos (TikTok/Reels/Shorts). "
+        "You write vivid, engaging short stories meant to be narrated aloud."
+    )
+    prompt = (
+        f"Write {kind}{theme} in {lang} for a narrated ~{req.duration}-second vertical cartoon video. "
+        f"About {words} words. Make it easy to follow, visual, with a clear beginning and a satisfying ending. "
+        "No title, no emojis, no hashtags, no stage directions. Return ONLY the story text."
+    )
+    try:
+        story = await llm_complete(system, prompt, "story-gen")
+        await log_cost(None, "joke", 1, COST["joke"], f"story:{req.story_type}")
+        return {"story": story.strip(), "source": "ai"}
+    except Exception as e:
+        await log_failure("openai", "/stories/generate", e)
+        raise HTTPException(502, "Story generation failed. Please retry.")
 
 # ---------------- Stand-up generation (single comedian, no story) ----------------
 async def generate_standup_script(req: ScriptRequest):
@@ -387,20 +435,31 @@ async def generate_script(req: ScriptRequest):
     elif req.characters:
         names = ", ".join([c.get("name", "") for c in req.characters])
         char_hint = f"Use these existing characters when possible: {names}. "
-    system = (
-        "You are a storyboard writer for short cartoon comedy videos. You break a joke into visual scenes "
-        "with per-character dialogue, camera movement and a sound effect. You always respond with strict JSON."
-    )
+    is_story = req.mode == "story"
+    if is_story:
+        content_label = "story"
+        system = (
+            "You are a storyboard writer for short narrated cartoon videos. You break a story into vivid visual "
+            "scenes with narration/dialogue and camera movement. You always respond with strict JSON."
+        )
+        ending_note = "The final scene gives the story a satisfying, natural ending (NO joke punchline). "
+    else:
+        content_label = "joke"
+        system = (
+            "You are a storyboard writer for short cartoon comedy videos. You break a joke into visual scenes "
+            "with per-character dialogue, camera movement and a sound effect. You always respond with strict JSON."
+        )
+        ending_note = "The final scene must land the punchline. "
     prompt = (
-        f"Break this joke into a storyboard of about {n_scenes} scenes for a {req.duration}s vertical cartoon video in {lang}.\n\n"
-        f"JOKE:\n{req.joke}\n\n{char_hint}"
+        f"Break this {content_label} into a storyboard of about {n_scenes} scenes for a {req.duration}s vertical cartoon video in {lang}.\n\n"
+        f"{content_label.upper()}:\n{req.joke}\n\n{char_hint}"
         "Return STRICT JSON with this shape:\n"
         '{"characters":[{"name":"","description":"visual cartoon description"}],'
         '"scenes":[{"character_name":"","dialogue":"","is_narration":false,'
         '"camera_motion":"zoom_in|zoom_out|pan_left|pan_right|tilt_up|static",'
         '"sfx":"none|laugh|drum|boing|pop|whoosh|applause|ding",'
         '"image_prompt":"detailed cartoon scene illustration prompt, flat vector style, vibrant colors, 9:16"}]}\n'
-        "Keep dialogue short and punchy. The final scene must land the punchline. Return ONLY JSON."
+        f"Keep each line short. {ending_note}Return ONLY JSON."
     )
     try:
         raw = await llm_complete(system, prompt, "script-gen")
@@ -417,9 +476,12 @@ async def generate_script(req: ScriptRequest):
                 image_prompt=s.get("image_prompt", ""),
             ).model_dump())
         await log_cost(None, "script", 1, COST["script"])
-        # keep sound effects only at the end: silence between scenes, punchline (drums+laughs) at the last
+        # Stories: no end SFX (background music only). Jokes: punchline drums+laughs on the last scene.
         for i, s in enumerate(scenes):
-            s["sfx"] = "punchline" if i == len(scenes) - 1 else "none"
+            if is_story:
+                s["sfx"] = "none"
+            else:
+                s["sfx"] = "punchline" if i == len(scenes) - 1 else "none"
         return {"characters": data.get("characters", []), "scenes": scenes}
     except HTTPException:
         raise
@@ -823,6 +885,8 @@ async def create_project(req: ProjectCreate):
         "music_volume": req.music_volume,
         "laugh_intensity": req.laugh_intensity,
         "animate": req.animate,
+        "mode": req.mode,
+        "story_type": req.story_type,
         "char_refs": {},
         "joke": req.joke,
         "scenes": [s.model_dump() for s in req.scenes],
